@@ -1,0 +1,10 @@
+status: candidate
+policy:
+  running_reject_pct: 50.0
+  running_degrade_pct: 90.0
+  migration_degrade_count: 0
+  cv_degrade: 0.05
+  cv_reject: 0.20
+  minimum_repeats_parsec: 10
+  minimum_repeats_cloudsuite: 5
+calibration_rule: 'Freeze before holdout; CV degrade=max(0.05, 3*maximum clean calibration CV), reject=max(0.20, 2*degrade). PMU candidates 50/90 percent are heuristic, not standards.'

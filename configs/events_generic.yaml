@@ -1,0 +1,8 @@
+# Explicit P-core PMU on this hybrid host; generic architectural perf aliases.
+groups:
+  - '{cpu_core/cycles/,cpu_core/instructions/}'
+  - '{cpu_core/branches/,cpu_core/branch-misses/}'
+  - '{cpu_core/cache-references/,cpu_core/cache-misses/}'
+software: [context-switches, cpu-migrations, page-faults]
+# Same actual hardware events requested independently with names to force scheduling pressure.
+multiplex_extra_groups: 10

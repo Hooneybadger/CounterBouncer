@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+vendor/
+artifacts/
+*.egg-info/
+
+calibration/kernel
+calibration/memory/stream
+
+_workspace/
