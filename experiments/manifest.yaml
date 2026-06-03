@@ -1,0 +1,25 @@
+schema_version: 1
+experiment_id: native-holdout-v1
+seed: 20260908
+policy: configs/experiment.yaml
+preflight: artifacts/preflight/authorized/system.json
+cpus: '2,4,6,8'
+smt_siblings: '3,5,7,9'
+memory_interference_cpus: '24,25,26,27'
+conditions: [CLEAN, MULTIPLEX, SMT, MEMORY, UNPINNED]
+parsec:
+  workloads: [blackscholes, canneal, dedup, streamcluster]
+  input: native
+  threads: 4
+  repeats: 10
+  warmups: 1
+cloudsuite:
+  workload: data-caching
+  repeats: 5
+  warmups: 1
+  duration_s: 15
+  target_rps: 100000
+  scale: 28
+  server_memory_mb: 10240
+order: 'randomized condition order within each repetition block; suite/workload order fixed'
+labels: 'Generated from condition configuration, never handwritten bad/good labels'

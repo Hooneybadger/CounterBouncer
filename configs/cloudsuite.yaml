@@ -1,0 +1,13 @@
+repository: https://github.com/parsa-epfl/cloudsuite
+workload: data-caching
+images: [cloudsuite/data-caching:server, cloudsuite/data-caching:client]
+scale: 28
+server_memory_mb: 10240
+server_threads: 4
+client_threads: 8
+connections: 200
+get_ratio: 0.8
+target_rps: 100000
+duration_s: 15
+exclude_initial_intervals: 2
+qos: 'interval p99 < 1 ms; report median of interval p99 separately'
