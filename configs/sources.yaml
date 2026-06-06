@@ -1,0 +1,19 @@
+parsec:
+  url: https://github.com/cirosantilli/parsec-benchmark.git
+  commit: 9484e00b731815533b0014c5db8615865cafa8c0
+cloudsuite:
+  url: https://github.com/parsa-epfl/cloudsuite.git
+  commit: c9d7584b9f4f0dec56e6683ebd61dad66ac1d06a
+memcached-loadtester:
+  url: https://github.com/parsa-epfl/memcached-loadtester.git
+  commit: 803e1b08c5bcb75c74a12bb35e86d3832bdd4d33
+STREAM:
+  url: https://github.com/jeffhammond/STREAM.git
+  commit: 6703f7504a38a8da96b353cadafa64d3c2d7a2d3
+azure:
+  url: https://github.com/Azure/AzurePublicDataset.git
+  commit: 207bed67dd10090b28ad4f745b2cfd41a11aace4
+cloudsuite_server:
+  image: cloudsuite/data-caching@sha256:d87d3de8aaf14dc8a0230655b0c0cf5dbb24d89b64ec5915cd0439c38574804f
+cloudsuite_client:
+  image: cloudsuite/data-caching@sha256:72dbd71a20fee82e2e25eb71afd912cd3bf00aa521867b40cff71e0b5cfd494c

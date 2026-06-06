@@ -17,7 +17,7 @@ cloudsuite:
   workload: data-caching
   repeats: 5
   warmups: 1
-  duration_s: 15
+  duration_s: 60
   target_rps: 100000
   scale: 28
   server_memory_mb: 10240
