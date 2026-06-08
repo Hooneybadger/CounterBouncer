@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in the gate, parser, or adapters is wrong
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste secrets, sudo passwords, or full `/proc` dumps.
+        Measurement disagreement is not automatically a bug.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - perf JSON parser
+        - quality rules / verdict
+        - PARSEC adapter
+        - CloudSuite adapter
+        - runner / experiment matrix
+        - analysis / plots
+        - docs
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Commands, CounterBouncer version (commit SHA), and whether this is a unit fixture or a real run.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Git commit
+      placeholder: 12-character SHA

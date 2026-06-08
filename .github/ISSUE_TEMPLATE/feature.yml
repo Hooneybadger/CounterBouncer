@@ -1,0 +1,28 @@
+name: Feature request
+description: A change to the quality gate or adapters
+title: "[Feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Out of scope unless you make a strong case: profiler UI, flame graphs,
+        LLM auto-diagnosis, invented counters, or CXL claims without a device.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can a user not decide today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence plan
+      description: How would this be validated on real workloads without retuning a frozen holdout?

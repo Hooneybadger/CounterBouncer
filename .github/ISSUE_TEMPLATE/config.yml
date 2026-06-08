@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Reproducing experiments
+    url: https://github.com/Hooneybadger/CounterBouncer/blob/main/experiments/README.md
+    about: Setup and holdout reproduction steps
+  - name: Results report
+    url: https://github.com/Hooneybadger/CounterBouncer/blob/main/docs/technical_report.md
+    about: Measured campaign write-up (not a support channel)
