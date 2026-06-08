@@ -10,7 +10,7 @@ policy:
 calibration_rule: Freeze before holdout; CV degrade=max(0.05, 3*maximum clean calibration
   CV), reject=max(0.20, 2*degrade). PMU candidates 50/90 percent are heuristic, not
   standards.
-frozen_at: '2026-09-08T05:42:44.828333+00:00'
+frozen_at: '2026-06-08T05:42:44.828333+00:00'
 calibration_summary:
   branch-predictable-CLEAN:
     n: 10

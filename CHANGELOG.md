@@ -4,7 +4,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/) for the Python package API,
 not for measurement campaigns (those are named, e.g. `native-holdout-v1`).
 
-## [0.1.0] — 2026-09-08
+## [0.1.0] — 2026-06-08
 
 Published name: **CounterBouncer**. Python package `counterbouncer`, CLI `bouncer`.
 
