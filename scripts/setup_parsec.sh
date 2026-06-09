@@ -5,7 +5,7 @@ mkdir -p vendor/downloads artifacts/setup
 if [ ! -d vendor/parsec/.git ]; then
   git clone https://github.com/cirosantilli/parsec-benchmark.git vendor/parsec
 fi
-# Original PARSEC 3.0 archives mirrored by the setup reference from the spec.
+# Original PARSEC 3.0 native input archives.
 base=https://github.com/cirosantilli/parsec-benchmark/releases/download/3.0
 for item in parsec-3.0-core.tar.gz parsec-3.0-input-native.tar.gz.{0..4}; do
   curl --fail --silent --show-error --location --retry 3 --connect-timeout 30 --continue-at - "$base/$item" -o "vendor/downloads/$item"

@@ -27,21 +27,21 @@ bash scripts/build_calibration.sh
 
 `native-holdout-v2`는 `bash scripts/run_v2_campaign.sh`입니다. 정책은
 `configs/experiment_v2.yaml`입니다. CloudSuite 보완은
-`experiments/manifest_v2_1_cloudsuite.yaml`입니다. 동결 정책은 다시
-맞추지 않습니다.
+`experiments/manifest_v2_1_cloudsuite.yaml`입니다. 동결한 정책은 그대로
+둡니다.
 
 ## 재개와 실패
 
 run matrix는 매니페스트가 같고 이미 끝난 `run_id`만 이어서 합니다.
-중간에 끊긴 run은 보존하고 살펴보기 전에는 재개를 멈춥니다. 실패를
-조용히 덮지 않습니다. warmup은 본측정과 별도입니다. 이번 캠페인에서
-조사한 중단분은 `artifacts/interrupted/`에 있고 holdout에는 들어가지
-않습니다. 측정 matrix와 동시에 빌드·다운로드·분석이나 다른
-CounterBouncer 벤치마크를 돌리지 않습니다.
+중간에 끊긴 run은 보존하고 살펴보기 전에는 재개를 멈춥니다. 실패는
+남깁니다. warmup은 본측정과 별도입니다. 이번 캠페인에서
+조사한 중단분은 `artifacts/interrupted/`에 있고 holdout에는 없습니다.
+측정 중에는 빌드·다운로드·분석이나 다른 CounterBouncer 벤치마크를
+같이 안 돌립니다.
 
 새 머신이면 실험을 따로 만들고 calibration을 새로 모은 뒤, 그
-holdout 전에 정책을 새로 freeze합니다. 지금 있는 정책을 다시 맞추지
-않습니다. 여기 적힌 topology·PMU 이름은 이 호스트 전용이라 다시
+holdout 전에 정책을 새로 freeze합니다. 지금 있는 정책은 그대로
+둡니다. 여기 적힌 topology·PMU 이름은 이 호스트 전용이라 다시
 검사해야 합니다.
 
 ## CloudSuite 컨테이너
@@ -50,8 +50,8 @@ holdout 전에 정책을 새로 freeze합니다. 지금 있는 정책을 다시 
 고정합니다. CloudSuite 설치는 그 이미지가 있다고 보고
 `counterbouncer-dc-server`, `counterbouncer-dc-client`,
 `counterbouncer-net`만 만듭니다. 처음 설치가 데이터셋을 스케일·워밍합니다.
-측정 중에는 스케일을 반복하지 않습니다. 이미지 digest는
-`artifacts/setup`에 있습니다. 호스트 포트는 열지 않습니다.
+측정 중에는 스케일을 다시 안 합니다. 이미지 digest는
+`artifacts/setup`에 있습니다. 호스트 포트는 안 엽니다.
 
 재현이 끝나면 더 이상 필요 없을 때 그 컨테이너 두 개와
 `counterbouncer-net`만 정지·삭제합니다. 예전 이름 `metrictrust-dc-*`가

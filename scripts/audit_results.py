@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed on incomplete portfolio evidence; preserve every failed run."""
+"""Fail closed on incomplete campaign evidence; preserve every failed run."""
 import argparse
 from pathlib import Path
 import json

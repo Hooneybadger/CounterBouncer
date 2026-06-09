@@ -48,5 +48,3 @@ Published name: **CounterBouncer**. Python package `counterbouncer`, CLI `bounce
 - Frozen calibration policy and `native-holdout-v1` campaign tooling
 - Results report, GitHub-visible figure copies under `docs/figures/`, and contribution templates
 
-Raw run artifacts are not shipped in git. The README is written for a first-time reader
-and is not generated from the campaign tables.

@@ -18,5 +18,5 @@ Azure 인용: Johannes Freischuetz, Konstantinos Kanellis, Brian Kroth,
 and Shivaram Venkataraman. 2025. TUNA: Tuning Unstable and Noisy Cloud
 Applications. EuroSys '25. 데이터셋은 CC-BY입니다. upstream LICENSE는
 `vendor/azure`에 그대로 둡니다. 벤치마크 소스·입력 라이선스는 각
-upstream에 있습니다. vendor 코드, 데이터셋, 이미지는 CounterBouncer
-원저작으로 다시 올리지 않습니다.
+upstream에 있습니다. vendor 코드, 데이터셋, 이미지는 이 저장소
+원저작으로 다시 안 올립니다.
