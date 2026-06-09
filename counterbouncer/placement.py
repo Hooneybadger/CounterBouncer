@@ -1,6 +1,7 @@
 """Sample which CPUs a process tree used. Summary only; not a scheduler trace."""
 from collections import Counter
 from pathlib import Path
+import os
 import threading
 
 
@@ -21,6 +22,13 @@ def _read_stat(path):
         return None
 
 
+def _cgroup(pid):
+    try:
+        return Path(f'/proc/{pid}/cgroup').read_text()
+    except OSError:
+        return None
+
+
 def _children_of(pid):
     children_path = Path(f'/proc/{pid}/task/{pid}/children')
     if children_path.exists():
@@ -34,14 +42,19 @@ def _children_of(pid):
 
 
 def descendant_pids(root):
-    found = {int(root)}
-    frontier = [int(root)]
+    root = int(root)
+    found = {root}
+    frontier = [root]
+    group = _cgroup(root)
     while frontier:
         pid = frontier.pop()
         for kid in _children_of(pid):
-            if kid not in found:
-                found.add(kid)
-                frontier.append(kid)
+            if kid in found:
+                continue
+            if group is not None and _cgroup(kid) != group:
+                continue
+            found.add(kid)
+            frontier.append(kid)
     return found
 
 
@@ -70,8 +83,16 @@ def observed_cpus(root_pid):
             if not text:
                 continue
             _, cpu = _stat_ppid_and_cpu(text)
-            if cpu is not None:
-                cpus.append(cpu)
+            if cpu is None:
+                continue
+            try:
+                allowed = os.sched_getaffinity(int(tid.name))
+            except OSError:
+                allowed = None
+            # Last-run CPU in stat can be stale from before a cpuset change.
+            if allowed is not None and cpu not in allowed:
+                continue
+            cpus.append(cpu)
     return cpus
 
 

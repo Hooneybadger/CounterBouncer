@@ -59,10 +59,3 @@ holdout으로 맞추지 않은 후보 heuristic이며 freeze 전에 정책 파�
 
 하드 판정은 run 단위입니다. `HIGH_RUN_VARIANCE`는 그룹 주석입니다.
 
-CloudSuite latency는 interval p99의 중앙값이지 요청 전체 pooled p99가
-아닙니다. 공식 histogram 해상도는 유한합니다. 소스 `timeDiff` 식에는
-마이크로초 필드로 보이는 오기가 있습니다. 결과는 로더가 낸 그대로
-보고합니다.
-
-Azure는 별도로 suite/test/unit/SKU/region/lifespan으로 층화합니다.
-PMU 참값이 아니고 정확도 라벨도 주지 않습니다.

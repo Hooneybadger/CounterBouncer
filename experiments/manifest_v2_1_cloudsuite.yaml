@@ -1,0 +1,20 @@
+schema_version: 2
+experiment_id: native-cloudsuite-v2.1
+seed: 202606091
+policy: configs/experiment_v2.yaml
+cpus: '2,4,6,8'
+smt_siblings: '3,5,7,9'
+memory_interference_cpus: '24,25,26,27'
+conditions: [CLEAN, MEMORY]
+cloudsuite:
+  workload: data-caching
+  repeats: 5
+  warmups: 1
+  duration_s: 60
+  target_rps: 100000
+  scale: 28
+  server_memory_mb: 10240
+notes: >
+  Complementary server-thread affinity check. Same frozen v2 policy.
+  Do not retune configs/experiment_v2.yaml. native-holdout-v2 CloudSuite
+  remains the coverage-failure record.

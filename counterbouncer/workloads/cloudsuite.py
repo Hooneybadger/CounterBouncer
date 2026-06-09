@@ -5,7 +5,35 @@ import statistics
 import subprocess
 from .base import Workload
 from ..host import server_container, client_container
-from ..topology import affinity_for, probe
+from ..placement import descendant_pids
+from ..topology import affinity_for, apply_thread_affinity, probe
+
+
+def _comm(pid):
+    try:
+        return Path(f'/proc/{int(pid)}/comm').read_text().strip()
+    except OSError:
+        return ''
+
+
+def server_host_pid(container):
+    pid = int(subprocess.check_output(['docker', 'inspect', '-f', '{{.State.Pid}}', container], text=True))
+    if _comm(pid) == 'memcached':
+        return pid
+    for kid in descendant_pids(pid):
+        if _comm(kid) == 'memcached':
+            return kid
+    return pid
+
+
+def bind_server(container, cpus):
+    subprocess.run(['docker', 'update', '--cpuset-cpus', cpus, container], check=True, capture_output=True)
+    pid = server_host_pid(container)
+    pinned = apply_thread_affinity(pid, cpus)
+    for kid in descendant_pids(pid):
+        if kid != pid:
+            pinned += apply_thread_affinity(kid, cpus)
+    return pid, pinned
 
 
 def parse(text):
@@ -40,8 +68,7 @@ def make(condition, seconds=15, rps=100000, cpus=None):
         cpus = affinity_for(condition, '2,4,6,8')
     if cpus is None:
         cpus = probe()['present_spec'] or '0-31'
-    subprocess.run(['docker', 'update', '--cpuset-cpus', cpus, server], check=True, capture_output=True)
-    pid = int(subprocess.check_output(['docker', 'inspect', '-f', '{{.State.Pid}}', server], text=True))
+    pid, pinned = bind_server(server, cpus)
     version = subprocess.check_output(['docker', 'inspect', '-f', '{{.Image}}', server], text=True).strip()
     command = ['docker', 'exec', '-t', client, 'timeout', '--signal=TERM', str(seconds),
                '/bin/bash', '/entrypoint.sh', '--m=RPS', '--S=28', '--g=0.8', '--c=200', '--w=8', '--T=1', f'--r={rps}']
@@ -50,5 +77,6 @@ def make(condition, seconds=15, rps=100000, cpus=None):
                     metadata={'server_threads': 4, 'server_memory_mb': 10240, 'client_cpus': '16-23',
                               'target_rps': rps, 'duration_s': seconds, 'server_cpus': cpus,
                               'server_container': server, 'client_container': client,
-                              'measurement_target': 'host PID of server, not Docker CLI',
+                              'measurement_target': 'host PID of memcached, not Docker CLI',
+                              'thread_affinity_applied': pinned,
                               'network': 'single-host dedicated Docker bridge'})

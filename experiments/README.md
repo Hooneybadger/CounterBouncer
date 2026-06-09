@@ -25,28 +25,10 @@ bash scripts/build_calibration.sh
 .venv/bin/python scripts/audit_results.py
 ```
 
-`native-holdout-v2`는 별도 정책과 매니페스트입니다.
-
-```console
-python3 scripts/prepare_baseline.py
-.venv/bin/python scripts/calibrate.py --policy configs/experiment_v2.yaml --output artifacts/calibration-v2 --seed 202609082 --cpus 2
-.venv/bin/python scripts/run_matrix.py --manifest experiments/manifest_v2.yaml --suite parsec --require-clean-host
-.venv/bin/python scripts/run_matrix.py --manifest experiments/manifest_reference.yaml --suite parsec --require-clean-host
-.venv/bin/python scripts/run_matrix.py --manifest experiments/manifest_v2.yaml --suite cloudsuite
-.venv/bin/python analysis/analyze.py --manifest experiments/manifest_v2.yaml
-.venv/bin/python analysis/reference.py
-.venv/bin/python analysis/plots_v2.py
-.venv/bin/python scripts/audit_results.py --manifest experiments/manifest_v2.yaml
-.venv/bin/python scripts/audit_results.py --manifest experiments/manifest_reference.yaml
-```
-
-한 번에 이으려면 `bash scripts/run_v2_campaign.sh`입니다.
-`python3 scripts/prepare_baseline.py`는 `counterbouncer-dc-*` /
-`metrictrust-dc-*`만 멈춥니다. 다른 랩 컨테이너는 그대로 둡니다.
-
-`analysis/plots.py`와 `analysis/azure.py`는 `artifacts/`에 원본을 쓰고
-GitHub에서 열리는 복사본을 `docs/figures/`에도 둡니다. README는 손으로
-유지합니다. `scripts/write_portfolio.py`가 README를 덮어쓰지 않습니다.
+`native-holdout-v2`는 `bash scripts/run_v2_campaign.sh`입니다. 정책은
+`configs/experiment_v2.yaml`입니다. CloudSuite 보완은
+`experiments/manifest_v2_1_cloudsuite.yaml`입니다. 동결 정책은 다시
+맞추지 않습니다.
 
 ## 재개와 실패
 

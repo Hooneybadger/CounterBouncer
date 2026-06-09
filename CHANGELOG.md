@@ -4,6 +4,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/) for the Python package API,
 not for measurement campaigns (those are named, e.g. `native-holdout-v1`).
 
+## [0.2.1] — 2026-06-09
+
+### Fixed
+
+- After `docker update --cpuset-cpus`, pin memcached threads with `sched_setaffinity`.
+  Ignore a thread's last-run CPU when it is outside the current affinity mask.
+
+### Changed
+
+- MULTIPLEX `INVALID` is a coverage-policy miss, not a claim that scaled IPC is wrong.
+  REFERENCE deviations stay blackscholes +0.02% and swaptions −0.22%.
+
+### Added
+
+- Complementary CloudSuite check `native-cloudsuite-v2.1` (CLEAN and MEMORY only).
+  `configs/experiment_v2.yaml` is not retuned.
+
 ## [0.2.0] — 2026-06-09
 
 ### Changed

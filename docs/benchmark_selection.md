@@ -31,10 +31,4 @@ swaptions native도 입력 아카이브가 없고 CLI 인자만 씁니다. 임�
 워크로드로 바꾼 것이 아니라 공식 애플리케이션 벤치마크 설정입니다.
 provenance에 이 경우의 `native.runconf` 해시를 남겼습니다.
 
-출처:
-
-- https://github.com/cirosantilli/parsec-benchmark
-- https://github.com/csail-csg/parsec
-- https://github.com/parsa-epfl/cloudsuite/blob/main/docs/benchmarks/data-caching.md
-- https://github.com/parsa-epfl/memcached-loadtester/tree/v4.0
-- https://github.com/jeffhammond/STREAM
+출처는 [sources.md](sources.md)입니다.

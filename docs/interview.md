@@ -15,35 +15,17 @@
 5. **IPC의 한계.** 합친 instructions/cycles는 PMU, 실행 범위, SMT,
    위상, 스케줄에 달렸습니다. IPC가 높다고 애플리케이션 처리량이 높은
    것은 아니고, 낮다고 병목의 증거도 아닙니다.
-6. **generic cache 이벤트.** 마이크로아키텍처마다 매핑이 다릅니다.
-   generic cache miss 비율이라고 적고 만능 LLC miss율이나 메모리
-   대역폭이라고 쓰지 않습니다.
-7. **참값이 없습니다.** 카운터, 샘플링, 정의, OS 범위 모두 치우칠 수
-   있습니다. 이 게이트는 진단에 쓸 근거가 충분한지를 볼 뿐, 카운터가
-   참 숫자인지를 보지 않습니다.
-8. **CLEAN.** 설정 고정, pin된 CPU set, warmup, CounterBouncer 경쟁 부하
-   없음. 호스트는 공유이고 보통의 OS 활동은 남습니다. CLEAN은 실험
-   조건이지 정답 라벨이 아닙니다. pin 집합 안의 `cpu-migrations`만으로는
-   integrity를 떨어뜨리지 않습니다. 허용 집합을 벗어나면
-   `AFFINITY_ESCAPE`입니다.
-9. **Affinity.** 쓸 수 있는 CPU를 정해서 토폴로지 변동을 줄입니다. CPU가
-   여러 개면 그 안에서 이동은 남습니다. 허용 집합을 벗어난 이동, P/E
-   이동, NUMA 이동은 따로 봅니다.
-10. **SMT.** sibling이 실행·캐시 자원을 나눕니다. 실제 경쟁 작업은
-    PMU running이 좋아도 애플리케이션 시간을 바꿀 수 있습니다. 스케줄
-    품질만으로 모든 contention을 잡지 못합니다. 이 경우는 integrity
-    VALID, context CONTAMINATED가 될 수 있습니다.
-11. **분산.** 실제 애플리케이션 행동이나 환경일 수 있고, 카운팅이
-    틀렸다는 뜻은 아닙니다. 통계 판정은 반복 그룹을 말하고 run 단위
-    하드 판정은 따로 남아 있습니다.
-12. **임계.** 후보 heuristic → 측정한 calibration → 시각/해시 freeze →
-    holdout은 손대지 않음. 맞춘 CV 컷과 고정 running-ratio 후보는 업계
-    표준이 아닙니다.
-13. **Azure.** 따로 모은 공개 VM 측정으로 장기 변동을 봅니다. 로컬
-    PMU 라벨도, 분류 정확도 분모도 여기서 만들지 않습니다.
-14. **perf / LIKWID와 다른 점.** CounterBouncer는 측정된 카운터를 받아
-    유효성 근거와 반복 정책을 붙입니다. 수집 도구를 대체하지 않고
-    profiler UI도 없습니다.
-15. **CXL로 확장하려면.** 문서화된 이벤트 의미, 접근 백엔드,
-    토폴로지/범위, 시계 정렬, 스케줄 메타데이터, 실제 장치/워크로드,
-    독립 검증이 모두 필요합니다.
+6. **generic cache / 참값.** 마이크로아키텍처마다 매핑이 다릅니다.
+   이 게이트는 진단에 쓸 근거가 충분한지를 볼 뿐, 카운터가 참
+   숫자인지를 보지 않습니다.
+7. **CLEAN.** pin, warmup, CounterBouncer 경쟁 부하 없음. 공유
+   호스트입니다. 조건이지 정답 라벨이 아닙니다.
+8. **Affinity.** 허용 집합 안 이동은 남습니다. 집합 밖·P/E·NUMA는
+   따로 봅니다.
+9. **SMT.** PMU running이 좋아도 애플리케이션 시간을 바꿀 수 있습니다.
+   integrity VALID, context CONTAMINATED가 될 수 있습니다.
+10. **임계.** heuristic → calibration → freeze → holdout은 손대지
+    않음.
+11. **Azure.** 로컬 PMU 라벨이나 분류 정확도 분모가 아닙니다.
+12. **INVALID / REJECT.** 값이 틀렸다는 증명이 아닙니다. 동결한
+    coverage 요구를 못 맞췄다는 뜻입니다.

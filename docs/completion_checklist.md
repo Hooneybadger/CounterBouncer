@@ -9,6 +9,7 @@
 
 `artifacts/completion-audit-native-holdout-v2.json` 상태 **PASS**
 (270회, 문제 0). `native-reference-v2` 40회도 PASS입니다.
+`native-cloudsuite-v2.1` 10회도 PASS입니다.
 
 | 명세 요구 | 근거 |
 |---|---|

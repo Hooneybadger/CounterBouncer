@@ -29,16 +29,7 @@ interval-p99는 UNPINNED에서 CLEAN 대비 +121.7%입니다.
 
 ---
 
-## 2. 질문과 범위 밖
-
-질문은 “왜 느린가”가 아니라 **“이번 측정을 진단 근거로 써도 되는가”**입니다.
-
-하지 않은 것: profiler, dashboard, LLM 병목 진단, CXL/accelerator
-counter, 임의 생성 성능값, “정확도 95%”처럼 정의되지 않은 지표.
-
----
-
-## 3. 실험 환경
+## 2. 실험 환경
 
 | 항목 | 값 |
 |---|---|
@@ -56,9 +47,9 @@ counter, 임의 생성 성능값, “정확도 95%”처럼 정의되지 않은 
 
 ---
 
-## 4. 방법
+## 3. 방법
 
-### 4.1 Workload
+### 3.1 Workload
 
 | Suite | Workload | Input / 설정 | 반복 |
 |---|---|---|---|
@@ -69,7 +60,7 @@ PARSEC는 직접 바이너리, CloudSuite PMU는 서버 host PID입니다. 조�
 순서는 repetition block 안에서 무작위화했습니다. 라벨은 manifest에서
 생성했고 손으로 good/bad를 넣지 않았습니다.
 
-### 4.2 조건
+### 3.2 조건
 
 | 조건 | 내용 |
 |---|---|
@@ -81,7 +72,7 @@ PARSEC는 직접 바이너리, CloudSuite PMU는 서버 host PID입니다. 조�
 
 선택 조건 E5(frequency/power)는 하지 않았습니다.
 
-### 4.3 판정 정책 (holdout 전 freeze)
+### 3.3 판정 정책 (holdout 전 freeze)
 
 Calibration 80회 수집 후 정책을 고정했습니다. holdout을 본 뒤
 재튜닝하지 않았습니다.
@@ -103,9 +94,9 @@ Calibration 80회 수집 후 정책을 고정했습니다. holdout을 본 뒤
 
 ---
 
-## 5. Holdout 결과
+## 4. Holdout 결과
 
-### 5.1 판정 분포
+### 4.1 판정 분포
 
 조건당 45회 (PARSEC 40 + CloudSuite 5).
 
@@ -132,7 +123,7 @@ Reason code (한 run에 여러 개 가능): `LOW_PMU_RUNNING_RATIO` 300,
 0.00%입니다. 런타임 기준으로 잡은 CV를 latency에 그대로 쓴 것은
 한계로 남깁니다.
 
-### 5.2 PMU scheduling
+### 4.2 PMU scheduling
 
 최소 `cpu_core` `pcnt-running`:
 
@@ -149,7 +140,7 @@ Reason code (한 run에 여러 개 가능): `LOW_PMU_RUNNING_RATIO` 300,
 MULTIPLEX는 요청 event가 늘어난 실제 multiplexing입니다. 값을 JSON에
 넣은 것이 아닙니다.
 
-### 5.3 애플리케이션 측정 (CLEAN median 대비)
+### 4.3 애플리케이션 측정 (CLEAN median 대비)
 
 PARSEC median runtime (초). 변화율은 해당 workload CLEAN median 대비.
 
@@ -175,32 +166,15 @@ interval 제외):
 | MEMORY | 100028.7 | 0.00% | 0.03310 | +49.8% |
 | UNPINNED | 100022.5 | 0.00% | 0.04900 | **+121.7%** |
 
-보고된 p99는 interval p99의 반복 간 중앙값입니다. 요청 전체 pooled
-p99가 아닙니다.
+보고된 p99는 interval p99의 반복 간 중앙값입니다.
 
 ![Figure 3. 반복 CV](figures/figure3_stability.png)
 
-Figure 3에서 data-caching 막대가 안 보이는 것은 throughput CV가 0에
-가깝기 때문입니다.
-
----
-
-## 6. 품질 판정과 애플리케이션 측정의 관계
-
 ![Figure 5. 판정과 애플리케이션 시간](figures/figure5_outcome.png)
 
-| 관찰 | 측정 | 해석 한계 |
-|---|---|---|
-| MULTIPLEX REJECT, runtime ≈ CLEAN | blackscholes +0.8%, canneal +1.0%, dedup 0.0%, streamcluster −1.3%, CloudSuite throughput 0.000% | 느리지 않아도 측정 coverage가 부족할 수 있다 |
-| blackscholes SMT ACCEPT, runtime +45.3% | 9/10 ACCEPT, PMU running 100% | 스케줄링이 좋아도 sibling contention은 애플리케이션을 늘릴 수 있다 |
-| CloudSuite UNPINNED REJECT, p99 +121.7% | throughput은 그대로 | 고정 load에서는 latency가 더 잘 움직인다 |
-| CLEAN 전원 DEGRADED | pin 집합 내부 `cpu-migrations` | CLEAN은 실험 조건이지 “올바른 측정” 라벨이 아니다 |
-
-게이트는 병목을 진단하지 않습니다. 위 표는 연관입니다.
-
 ---
 
-## 7. Azure 외부 자료
+## 5. Azure 외부 자료
 
 Azure VM Noise Dataset 2024: 776 CSV partition, 7,037,220 observations,
 invalid 0, long/short 매칭 364쌍.
@@ -215,7 +189,7 @@ invalid 0, long/short 매칭 364쌍.
 
 ---
 
-## 8. 실패·중단 기록
+## 6. 실패·중단 기록
 
 | 사건 | 조치 |
 |---|---|
@@ -227,54 +201,13 @@ invalid 0, long/short 매칭 364쌍.
 
 실행 실패로 버린 holdout run은 없습니다.
 
----
-
-## 9. 한계
-
-- 공유 bare-metal 1대. 주파수/터보 미고정. E5 없음.
-- `cpu_core`는 UNPINNED의 E-core 시간을 포함하지 않습니다. IPC를 PMU 간에 합산하지 않았습니다.
-- generic cache event를 다른 CPU에도 통하는 LLC/bandwidth라고 주장하지 않습니다.
-- PARSEC는 hook ROI가 아니라 프로세스 전체 시간입니다.
-- CloudSuite는 단일 호스트 Docker bridge, 고정 offered load입니다.
-- threshold는 heuristic입니다. 이 호스트·이 반복 수 밖의 일반 정확도를 주장하지 않습니다.
-
-전체 목록: [limitations.md](limitations.md).
+한계는 [limitations.md](limitations.md). 재현은
+[experiments/README.md](../experiments/README.md). 원시 표는 로컬
+`artifacts/analysis/report.json`입니다.
 
 ---
 
-## 10. 결론
-
-실제 애플리케이션 225회에서, 요청 event가 늘어나면 `pcnt-running`이
-약 30%로 떨어졌고 해당 측정은 전부 REJECT였습니다. 같은 조건에서
-애플리케이션 runtime은 거의 늘지 않았습니다.
-
-pin과 warmup이 있는 CLEAN도 이 호스트에서는 `cpu-migrations` 때문에
-DEGRADED가 기본이었습니다. “깨끗한 조건”과 “ACCEPT”를 같은 말로 쓰지
-않습니다.
-
-SMT/memory contention은 워크로드에 따라 runtime 또는 p99를 바꿨고
-그때 PMU running이 100%인 경우(blackscholes SMT)도 있었습니다.
-
-CounterBouncer가 내는 것은 “느린 원인”이 아니라 이번 측정을 진단에
-넣어도 되는지와 그 근거 코드입니다.
-
-하지 않은 주장: PMU 오류 완벽 탐지, 모든 CPU에서 동일 의미의
-cache/bandwidth metric, CXL 성능, 정의되지 않은 정확도.
-
----
-
-## 11. 재현
-
-정책 파일 `configs/experiment.yaml`은 freeze 이후 바꾸지 않습니다.
-절차는 [experiments/README.md](../experiments/README.md).
-
-원시 표는 로컬 `artifacts/analysis/report.json`,
-`artifacts/analysis/runs.csv`에 있습니다. 파이프라인 그림은
-[Figure 1](figures/figure1_architecture.png).
-
----
-
-## 12. native-holdout-v2
+## 7. native-holdout-v2
 
 실험 ID `native-holdout-v2`. 기계 감사
 `artifacts/completion-audit-native-holdout-v2.json` → **PASS** (270회,
@@ -296,16 +229,10 @@ PARSEC CLEAN 전에 프로젝트 CloudSuite 컨테이너를 끊었습니다.
 | Integrity | VALID 160, INVALID 110 |
 | Context | CONTROLLED 100, CONTAMINATED 125, UNKNOWN 45 |
 | 접은 판정 | ACCEPT 70, DEGRADED 90, REJECT 110 |
-| MULTIPLEX | 45회 전부 integrity INVALID. 최소 `pcnt-running` 중앙값 30% |
-| HYBRID | 45회 전부 integrity INVALID, context UNKNOWN |
-| CloudSuite | 30회 전부 integrity INVALID (`AFFINITY_ESCAPE`, `CROSS_CORE_TYPE`) |
 
-PARSEC CLEAN 40회 가운데 blackscholes·canneal·swaptions 30회는
-VALID / CONTROLLED입니다. freqmine 10회는 VALID이지만 CPU `0`으로 나가
-context CONTAMINATED입니다. PCORE(허용 집합 `0-15`)에서는 freqmine도
-VALID / CONTROLLED입니다.
-
-조건당 45회 (PARSEC 40 + CloudSuite 5).
+조건당 45회 (PARSEC 40 + CloudSuite 5). REJECT 5는 전부 CloudSuite입니다.
+freqmine CLEAN 10회는 VALID이지만 CPU `0`으로 나가 CONTAMINATED이고,
+PCORE(`0-15`)에서는 ACCEPT입니다.
 
 | 조건 | ACCEPT | DEGRADED | REJECT |
 |---|---:|---:|---:|
@@ -339,18 +266,27 @@ CloudSuite Data Caching (고정 100,000 req/s):
 | PCORE | 100022.3 | 0.00% | 0.0231 ms | +4.5% |
 | HYBRID | 100022.5 | 0.00% | 0.0471 ms | **+113.1%** |
 
-REFERENCE `{cpu_core/cycles, cpu_core/instructions}` IPC 중앙값 대비
-MULTIPLEX IPC: blackscholes +0.02%, swaptions −0.22%. multiplex
-`pcnt-running` 중앙값은 30%입니다. 절대 참값이 아닙니다.
-
-holdout run의 `git_dirty`는 전부 true입니다. 측정 중에 게이트 코드가
-아직 커밋되지 않은 상태였습니다. 정책 파일 해시는 각 `run.json`에
-있습니다.
+REFERENCE IPC 대비 MULTIPLEX: blackscholes +0.02%, swaptions −0.22%
+(`pcnt-running` 30%). INVALID는 coverage 요구 미달이지 IPC 오차 증명이
+아닙니다. 이 holdout의 `git_dirty`는 true입니다.
 
 ![v2 두 축](figures/figure_v2_architecture.png)
 ![v2 축](figures/figure_v2_axes.png)
 ![v2 애플리케이션](figures/figure_v2_outcome.png)
 ![v2 REFERENCE](figures/figure_v2_reference.png)
+
+---
+
+## 8. native-cloudsuite-v2.1
+
+v2 CloudSuite 30회는 덮지 않았습니다. 서버 스레드를 pin한 뒤 CLEAN 5,
+MEMORY 5만 추가했습니다. 정책은 그대로입니다. 감사 PASS. 관측 CPU는
+`2,4,6,8`입니다.
+
+| 조건 | Integrity | Context | 접은 판정 | p99 |
+|---|---|---|---|---|
+| CLEAN | VALID 5/5 | CONTROLLED | ACCEPT | 0.0221 ms |
+| MEMORY | VALID 5/5 | CONTAMINATED | DEGRADED | 0.0301 ms (**+36.2%**) |
 
 ---
 

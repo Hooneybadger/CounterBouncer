@@ -34,6 +34,28 @@ def format_cpu_list(cpus):
     return ','.join(ranges)
 
 
+def apply_thread_affinity(pid, spec):
+    """Pin every thread in the process. Does not rewrite Docker cgroup by itself."""
+    import os
+    cpus = parse_cpu_list(spec) if isinstance(spec, str) else [int(x) for x in spec]
+    if not cpus:
+        return 0
+    mask = set(cpus)
+    pinned = 0
+    task = Path(f'/proc/{int(pid)}/task')
+    if not task.is_dir():
+        return 0
+    for tid in task.iterdir():
+        if not tid.name.isdigit():
+            continue
+        try:
+            os.sched_setaffinity(int(tid.name), mask)
+            pinned += 1
+        except OSError:
+            continue
+    return pinned
+
+
 def _read(path):
     try:
         return Path(path).read_text().strip()
