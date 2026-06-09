@@ -2,5 +2,5 @@ repository: https://github.com/cirosantilli/parsec-benchmark
 suite: PARSEC 3.0
 input: native
 threads: 4
-workloads: [blackscholes, canneal, dedup, streamcluster]
+workloads: [blackscholes, canneal, dedup, streamcluster, freqmine, swaptions]
 measurement_phase: whole_application_including_io

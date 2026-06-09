@@ -1,0 +1,18 @@
+schema_version: 2
+experiment_id: native-reference-v2
+seed: 202609083
+policy: configs/experiment_v2.yaml
+cpus: '2,4,6,8'
+conditions: [REFERENCE, MULTIPLEX]
+parsec:
+  workloads: [blackscholes, swaptions]
+  input: native
+  threads: 4
+  repeats: 10
+  warmups: 1
+order: 'randomized REFERENCE/MULTIPLEX order within each repetition block'
+labels: 'REFERENCE is a high-coverage minimal-event group, not absolute ground truth'
+notes: >
+  Same frozen v2 policy as native-holdout-v2. Compare derived IPC distributions.
+  REFERENCE requests {cpu_core/cycles, cpu_core/instructions} plus software events.
+audit_figures: [figure_v2_reference]

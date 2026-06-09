@@ -1,0 +1,166 @@
+status: frozen
+policy:
+  running_reject_pct: 50.0
+  running_degrade_pct: 90.0
+  cv_runtime_degrade: 0.5086329922009084
+  cv_runtime_reject: 1.0172659844018168
+  cv_latency_degrade: 0.1
+  cv_latency_reject: 0.25
+  minimum_repeats_parsec: 10
+  minimum_repeats_cloudsuite: 5
+  cv_degrade: 0.5086329922009084
+  cv_reject: 1.0172659844018168
+calibration_rule: 'v2 does not retune configs/experiment.yaml and does not use native-holdout-v1.
+  Freeze runtime CV from this campaign''s kernel CLEAN calibration: degrade=max(0.05,
+  3*maximum CLEAN calibration CV), reject=max(0.20, 2*degrade). Latency CV cutoffs
+  are declared candidate heuristics (batch vs fixed-load server are different quality
+  signals). They are not fitted on v1 CloudSuite holdout. PMU running candidates remain
+  50/50-90 percent heuristics, not standards. Within-pin cpu-migrations are not an
+  integrity failure.
+
+  '
+frozen_at: '2026-06-08T10:45:25.775010+00:00'
+calibration_summary:
+  branch-predictable-CLEAN:
+    n: 10
+    median: 0.0416741115
+    mad: 6.188000000000027e-05
+    mean: 0.0416811926
+    cv: 0.001960983478114491
+    outlier_indices: []
+  branch-random-CLEAN:
+    n: 10
+    median: 0.3673856435
+    mad: 0.0003292635000000099
+    mean: 0.367375338
+    cv: 0.0011179904704977722
+    outlier_indices: []
+  cache-small-CLEAN:
+    n: 10
+    median: 0.0345120755
+    mad: 3.3526999999998475e-05
+    mean: 0.0347367606
+    cv: 0.02107123568556411
+    outlier_indices:
+    - 2
+  cache-large-CLEAN:
+    n: 10
+    median: 4.0196846875
+    mad: 0.016355088500000114
+    mean: 3.7363498451
+    cv: 0.16954433073363614
+    outlier_indices:
+    - 2
+    - 7
+    - 8
+  memory-stream-CLEAN:
+    n: 10
+    median: 1.022016926
+    mad: 0.0024353449999999777
+    mean: 1.0223417438
+    cv: 0.004232387375837965
+    outlier_indices: []
+  branch-random-MULTIPLEX:
+    n: 10
+    median: 0.36835519699999997
+    mad: 0.0001637144999999951
+    mean: 0.3684274876
+    cv: 0.0006313295502022694
+    outlier_indices: []
+  branch-random-SMT:
+    n: 10
+    median: 0.49305915899999997
+    mad: 0.006141654000000024
+    mean: 0.49536575580000003
+    cv: 0.03257244045341603
+    outlier_indices:
+    - 7
+  memory-stream-MEMORY:
+    n: 10
+    median: 1.0400308735000001
+    mad: 0.002984594499999882
+    mean: 1.0373257193
+    cv: 0.007308056767948032
+    outlier_indices:
+    - 5
+calibration_run_hashes:
+  artifacts/calibration-v2/branch-predictable-clean-r00/run.json: 46dc8fd148c36c126dd32e118646bc1c9ec35d7ed9e4d466fa9719f07c42a437
+  artifacts/calibration-v2/branch-predictable-clean-r01/run.json: d9f823577cc74893d9cebc82c025f15a1ec44613309fc5d12642ed69c6b86176
+  artifacts/calibration-v2/branch-predictable-clean-r02/run.json: 757393b00d90f5171a4dfc8a1303232530591f0e4e5bfc90ee2f01b3ef72dad4
+  artifacts/calibration-v2/branch-predictable-clean-r03/run.json: df7de6e57963c961bdf1cd39a014707a01ea61078e582d2f7cdfcb059fff78ae
+  artifacts/calibration-v2/branch-predictable-clean-r04/run.json: 57ee13dd0e2fb3956eb51b0f0883fb583c908608f337696869c23ce976fc0638
+  artifacts/calibration-v2/branch-predictable-clean-r05/run.json: 56eed07cf6608665537618a5bfcf161dacb94f9df702f51c660cc114624e5ed5
+  artifacts/calibration-v2/branch-predictable-clean-r06/run.json: 948d706a9fdf68eb58487c97a005fa1d3bf6a50f80744b32567f291bf7a410f1
+  artifacts/calibration-v2/branch-predictable-clean-r07/run.json: a5793be7b827dd036e62a5cf342c450db6e9cb4bd3ae9cc442745cf0c408da0b
+  artifacts/calibration-v2/branch-predictable-clean-r08/run.json: 0f21483b3d4c8e00204b54a42d833f7f82a05ba1d2ac95c9efa22076f69307de
+  artifacts/calibration-v2/branch-predictable-clean-r09/run.json: deb0e899b464f266e4e0762886855940000db92627a21f98616bdf56119b4323
+  artifacts/calibration-v2/branch-random-clean-r00/run.json: 18f9c548e52639f89acb10e8d78c305e445f0d175c169db8764052e0f0322591
+  artifacts/calibration-v2/branch-random-clean-r01/run.json: 245659f639a604133ed9b9302578696939e1fcb8642a7190ef49aba0c0289119
+  artifacts/calibration-v2/branch-random-clean-r02/run.json: 43b17300435ea8dd1936c8a2d10a2683bf56806eb82f2afe50e053ff639179f0
+  artifacts/calibration-v2/branch-random-clean-r03/run.json: 780c0b1182c571a52a1bf0b4cb780761508048b2defa8bbb44dbfbe1bf2e799d
+  artifacts/calibration-v2/branch-random-clean-r04/run.json: 114c37392909b7149aa615b0295e07e7b92fb06ca3f90df77a1140c339b96021
+  artifacts/calibration-v2/branch-random-clean-r05/run.json: dfb8689944e092e18e6e3f034b6ec8377329e2d3a9a5b81bf03b83a9ea9cebe3
+  artifacts/calibration-v2/branch-random-clean-r06/run.json: 8c34acd11a17641428177a4b63722c2a19bf408b5382b02e7e6ad8dde93b4306
+  artifacts/calibration-v2/branch-random-clean-r07/run.json: ef84efac19f3ffda66bfee091e9db8433863351d942bfb05c786ccac3e3ef662
+  artifacts/calibration-v2/branch-random-clean-r08/run.json: b2908ecd1b8ec085a84bf2265db1f6b6a4cc6935f392e6fee8ffe73dd1d1d021
+  artifacts/calibration-v2/branch-random-clean-r09/run.json: 507146cf0b8ae5b677a9062bbbe6d2fb074046bd54b33d33e203a51b8c8eddd5
+  artifacts/calibration-v2/branch-random-multiplex-r00/run.json: c9ac14203cc67457caca9f71cc412ac414877d217372944c34138e37be5a6caf
+  artifacts/calibration-v2/branch-random-multiplex-r01/run.json: 4759ed5015b6e13025964d68080e65b2cbf4661ecbd67aa6ee45a894d4810868
+  artifacts/calibration-v2/branch-random-multiplex-r02/run.json: 78da119fa09fd2dff74e2d982a85a5190206d279240596d7708f66eb85f2a992
+  artifacts/calibration-v2/branch-random-multiplex-r03/run.json: 38900215e24486d8372976ed0580fce6dfbed24df086ccd06f66e326b6f903db
+  artifacts/calibration-v2/branch-random-multiplex-r04/run.json: 3e0e529103d4fb436d2d0244e38e7a2346e9b2d9efcc91712994de2b77a5651b
+  artifacts/calibration-v2/branch-random-multiplex-r05/run.json: 4e03b02c4aa4cba188a1e58f75d232b15445772326a614b3ecdbb3bafdacc27b
+  artifacts/calibration-v2/branch-random-multiplex-r06/run.json: ca8add5a92ba44ed0f36bac95c952a50817d14996baa9a190374de520e43bc70
+  artifacts/calibration-v2/branch-random-multiplex-r07/run.json: 848faf6542e8111d3ede596200df4c318895246df7e1c53bcf53bb2a53298295
+  artifacts/calibration-v2/branch-random-multiplex-r08/run.json: 9f6d6d83cb15d489f2a8f23734a3307d08badb62d99c324801d4599e548f52ed
+  artifacts/calibration-v2/branch-random-multiplex-r09/run.json: 78c2b891f4c60395f93c10691199cfc8a4c71b3b9d3b0403663d2eacc7f875de
+  artifacts/calibration-v2/branch-random-smt-r00/run.json: 52a98e98a13e04a9c4fbc2304ee153f60d6667ae2716d594d7d7d6bb6bea49d1
+  artifacts/calibration-v2/branch-random-smt-r01/run.json: 10c38ae0cef75593ddcd085ca937d4c8b949bb2938c90b7ef0f17a72df79ca6a
+  artifacts/calibration-v2/branch-random-smt-r02/run.json: ada3d7e8806e8e61a96785d922ee9abe604440787a8f61a260e629e3c44ae926
+  artifacts/calibration-v2/branch-random-smt-r03/run.json: f87fe62d1633eaf04b8d9f96624477f783cacea9bfef942fe823adb70b158496
+  artifacts/calibration-v2/branch-random-smt-r04/run.json: 3d33ecec15008772cbb17de7134f960d8f957620167811025dd8380dd34bf174
+  artifacts/calibration-v2/branch-random-smt-r05/run.json: 6cdbf4aea39132b237da866818cd1a4df9f73dce3d0031ea76f35e7392fd7257
+  artifacts/calibration-v2/branch-random-smt-r06/run.json: e3ad9130ace27f59930d3c3a14e4a5a53a8c6df3b1cc8cd18deaf02fa5fbbb4d
+  artifacts/calibration-v2/branch-random-smt-r07/run.json: bc4b3d44484f873ec752aa15312a6081ec912be550c842dcb2d2ef71b29b09e7
+  artifacts/calibration-v2/branch-random-smt-r08/run.json: 9644b2826cd0d6c33e662c8c51705a182e1eafbe9310c7a98b8a160c4dcd6bbb
+  artifacts/calibration-v2/branch-random-smt-r09/run.json: 10a45060dc1246464f33b5ef518038307b5f483f9dbecc6ae0135fdb5063d807
+  artifacts/calibration-v2/cache-large-clean-r00/run.json: 426cfa635eee77de5199a31964d8a5e9d30b9c9e7c71c4c6215a7bd6d9554851
+  artifacts/calibration-v2/cache-large-clean-r01/run.json: df63760ec832a6fa930a714d27aa45892ab00b980ae41ec83c266479447f2bc3
+  artifacts/calibration-v2/cache-large-clean-r02/run.json: 69c440c46b471ea27ea4d754491b4ff0fb0106e8d02529e18c3d6863e09f97cc
+  artifacts/calibration-v2/cache-large-clean-r03/run.json: 9644c0b02ff425e9da60477998e1fb6aa132e4f0e30b47e6943aad3339219d83
+  artifacts/calibration-v2/cache-large-clean-r04/run.json: 282281eef117b811fdddba47be9c195412cb4f6393084a85ccbf7ad23a4a99ae
+  artifacts/calibration-v2/cache-large-clean-r05/run.json: db2e0cd286d0244e163c3273fb2fb5b087908843c4ce9ba91b064b4d658d2d40
+  artifacts/calibration-v2/cache-large-clean-r06/run.json: 99c41f3a6513c1db15bd6b51857281c831c73b65f29ecda5471b5cae713ee4ed
+  artifacts/calibration-v2/cache-large-clean-r07/run.json: 85beb6f768cf6a572301c5d70de5129a1bf614d957556cd3ed9cbebd3ced4580
+  artifacts/calibration-v2/cache-large-clean-r08/run.json: c75c4a79945755213a1c394f49e26324aa9d3cdc93c8d09cf177ec39f8229e09
+  artifacts/calibration-v2/cache-large-clean-r09/run.json: ed0e4a4196a235bfe64035ab5a8361c43b72ec233a90bcde5cebf53b169c25e1
+  artifacts/calibration-v2/cache-small-clean-r00/run.json: b4e0262dd73e7541325e34a857c2094b53ccdd18f6519ecfe8318f1515a53e97
+  artifacts/calibration-v2/cache-small-clean-r01/run.json: a18b9ee1456b70b33bc3a5b31f99c6fad59749f00396b991aaf271daa45c10ac
+  artifacts/calibration-v2/cache-small-clean-r02/run.json: cd96a3b2ccd18f6f6ddc6de907ed98ad0b7fa8e91011ea4b2cd95fb375f0d2e8
+  artifacts/calibration-v2/cache-small-clean-r03/run.json: 88b0b8d1f84b4f9d53b91c54e4c10bbb6bce59ee710b56c35b37832ed3bb58e7
+  artifacts/calibration-v2/cache-small-clean-r04/run.json: 3d62dea7fee9f0ac478d1ad225603ba1a9533a86e48d2cf45f75fa12a4ad0e37
+  artifacts/calibration-v2/cache-small-clean-r05/run.json: 00b36c9e04a1ca26f4ea9f2e52cbeb094dcff69d31f55e475192ebc00fb62962
+  artifacts/calibration-v2/cache-small-clean-r06/run.json: 2d7d5bb37276e49d2403696469b95e57014a817d10d2745bced91f53346f7d8f
+  artifacts/calibration-v2/cache-small-clean-r07/run.json: f0e8eb73e29c19453b83715cae8d539320f38920464a46b786d2213fbb5394c7
+  artifacts/calibration-v2/cache-small-clean-r08/run.json: 0671626d864746ac46af71c16347c3d3befb25c42fd38b491d21bfcebea452d6
+  artifacts/calibration-v2/cache-small-clean-r09/run.json: ea5705539c09f7275c78176e1b40044854aeeb20513961a85eaecc498adb5064
+  artifacts/calibration-v2/memory-stream-clean-r00/run.json: 05f74deb6a47078af177bf25b04ff6f88dd17055c03ada1fabdbde70ff8efb44
+  artifacts/calibration-v2/memory-stream-clean-r01/run.json: 8754bf3bb68057b8150dce2be24284e343484139b28567d3321f4ea17b3ac14d
+  artifacts/calibration-v2/memory-stream-clean-r02/run.json: a49b17efcc373fca515ee56538b3e7c4ee14f92bad1c999f21a0ecbb870da263
+  artifacts/calibration-v2/memory-stream-clean-r03/run.json: 55276dbc751c5754d5ab681058fb44816d25b57a962525aa3cf2c6dc188cea56
+  artifacts/calibration-v2/memory-stream-clean-r04/run.json: f77a48e54e67e26aed44c913201cb33b9217eefc2220cc7cd47d90081cf36d07
+  artifacts/calibration-v2/memory-stream-clean-r05/run.json: 861e38758c7698ae01ca2ad7ba2b2762761ee813df3d8feab6611face52fe309
+  artifacts/calibration-v2/memory-stream-clean-r06/run.json: c5bff88c12d68d544b87e1d6aa9a4a173ded83daa93e2efcf15c87169601b83d
+  artifacts/calibration-v2/memory-stream-clean-r07/run.json: 4f2d625c8e95a464780ddf52817da00bf1d1337d3136083d65f359f0f499f97e
+  artifacts/calibration-v2/memory-stream-clean-r08/run.json: 11548235d4bba4f28ae7f77b5c05f5728ce814d3bc74fcea8a261dc012e6f0be
+  artifacts/calibration-v2/memory-stream-clean-r09/run.json: 1908c7b1e08204671de75e6a41455862552940c306142a05f144a78a032dfc94
+  artifacts/calibration-v2/memory-stream-memory-r00/run.json: a959cf93ae75de1a2738048a0b85a41f2f27920fcd1a4a407fea929aec5befb2
+  artifacts/calibration-v2/memory-stream-memory-r01/run.json: 8fea2e930d81693aa448ee22509ce2f48f32b02f339c0030bd4516318d3716a0
+  artifacts/calibration-v2/memory-stream-memory-r02/run.json: 984a1489a7220285bc194e9af53dc2e8bc5c833350c1aab60d9a2f5caaa24427
+  artifacts/calibration-v2/memory-stream-memory-r03/run.json: 8094043a7772d06ef9b34e6e7a7faecba9f9223866aa5d712f7b95469bdef09a
+  artifacts/calibration-v2/memory-stream-memory-r04/run.json: 8c7aa8555539bf96ec5fbb5632715f298a6ec4b02dcc13832474a40ee00ae7c3
+  artifacts/calibration-v2/memory-stream-memory-r05/run.json: a64a9476d643cef1f77b33c14810899cb9e54a712fa222aea2f07dcef9a5443f
+  artifacts/calibration-v2/memory-stream-memory-r06/run.json: 638ec33aba1d964d7349c93c6709bb9343bc5856094c414d9f64691aaba10803
+  artifacts/calibration-v2/memory-stream-memory-r07/run.json: 368b9adb7aee320fb2120707ffecd3fdea63f5cd3478f0118b0cf91ebfc5f4f3
+  artifacts/calibration-v2/memory-stream-memory-r08/run.json: 9bd1457b4c82709df35f921e7838e25820276522aa772a4cd1725fe34702ec9e
+  artifacts/calibration-v2/memory-stream-memory-r09/run.json: af3fee96cbd6fdad94d09a43c602f8db90faaca9331f51f197be5f4ef5336643

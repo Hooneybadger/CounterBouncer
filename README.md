@@ -22,24 +22,35 @@ CPU로 옮겨 다녔는지, 같은 조건의 반복이 얼마나 흔들렸는지
 속도로 끝났다고 해서 카운터 coverage가 충분한 것은 아니고,
 coverage가 좋아도 실행 환경이 깨끗한 것은 아닙니다.
 
+그래서 판정은 두 축입니다.
+
+| Measurement integrity | Experiment context | 사용 |
+| --- | --- | --- |
+| VALID | CONTROLLED | 진단·비교에 사용 |
+| VALID | CONTAMINATED | 측정은 유효, 비교는 주의 |
+| INVALID | (any) | 진단에 사용하지 않음 |
+
+한 줄 `ACCEPT` / `DEGRADED` / `REJECT`는 이 두 축을 접은 값입니다.
+
 ## 결과
 
-`native-holdout-v1`은 Intel Core i9-14900K bare-metal에서 PARSEC 3.0
-native 네 개(blackscholes, canneal, dedup, streamcluster, 각 4스레드)와
-CloudSuite Data Caching을 돌린 holdout입니다. 실제 애플리케이션 225회,
-warmup은 별도, 실행 실패 0회입니다. 판정은 ACCEPT 15, DEGRADED 160,
-REJECT 50입니다. 분류 정확도나 PMU 절대 오차율이 아닙니다.
+`native-holdout-v2`는 같은 i9-14900K bare-metal에서 PARSEC native 네
+개(blackscholes, canneal, freqmine, swaptions, 각 4스레드)와 CloudSuite
+Data Caching을 돌린 holdout입니다. 실제 애플리케이션 270회, warmup은
+별도, 실행 실패 0회입니다. integrity는 VALID 160, INVALID 110입니다.
+접은 판정은 ACCEPT 70, DEGRADED 90, REJECT 110입니다.
 
-정책은 calibration 80회 뒤에 고정했습니다. holdout을 보고 다시
-맞추지 않았습니다.
+정책은 새 calibration 뒤에 `configs/experiment_v2.yaml`에 고정했습니다.
+`configs/experiment.yaml`과 `native-holdout-v1`은 다시 맞추지 않았습니다.
 
-MULTIPLEX 45회는 최소 `pcnt-running` 중앙값 30%로 전부 REJECT였고,
-PARSEC runtime은 CLEAN과 거의 같았습니다. blackscholes SMT는 PMU
-running 100%에 ACCEPT가 많았지만 median runtime은 +45.3%였습니다.
-CloudSuite는 고정 100,000 req/s라 throughput CV가 0.00%이고,
-UNPINNED에서 interval-p99는 CLEAN 대비 +121.7%였습니다.
+MULTIPLEX 45회는 최소 `pcnt-running` 중앙값 30%로 integrity INVALID였고,
+PARSEC runtime은 CLEAN과 거의 같았습니다. blackscholes SMT는 running
+100%에 integrity VALID였지만 median runtime은 +45.8%였습니다.
+CloudSuite 30회는 서버 스레드가 pin과 P-core를 벗어나 전부 integrity
+INVALID입니다. HYBRID에서 interval-p99는 CLEAN 대비 +113.1%였습니다.
 
-표와 해석은 [결과 보고서](docs/technical_report.md)에 있습니다.
+표는 [결과 보고서](docs/technical_report.md)에 있습니다.
+`native-holdout-v1` 225회 숫자는 그 파일에 그대로 있습니다.
 
 ## 5분 만에 돌려보기
 
@@ -64,9 +75,15 @@ python3 -m venv .venv
 환경 스냅샷을 붙입니다. PARSEC는 공식 native 바이너리 전체(초기화·I/O
 포함)를 재고, CloudSuite Data Caching은 서버 호스트 PID를 잽니다.
 
-게이트는 하드 규칙과 그룹 안정성을 `ACCEPT` / `DEGRADED` / `REJECT`
-한 줄로 합칩니다. 조건은 CLEAN, MULTIPLEX, SMT, MEMORY, UNPINNED입니다.
-UNPINNED에서 명시한 `cpu_core`는 E-core 시간을 세지 않습니다.
+integrity는 스케줄링, grouping, hybrid coverage, 파서를 봅니다.
+context는 SMT·메모리 간섭, affinity 이탈, P/E 이동, 프로젝트 서버
+잔류를 봅니다. pin 집합 안의 `cpu-migrations`만으로는 integrity를
+떨어뜨리지 않습니다.
+
+조건은 CLEAN, MULTIPLEX, SMT, MEMORY, PCORE, HYBRID입니다. PCORE는
+모든 P-core, HYBRID는 P+E입니다. REFERENCE는
+`{cpu_core/cycles, cpu_core/instructions}`만 요청하는 high-coverage
+minimal-event group이지, 절대 참값이 아닙니다.
 
 run 디렉터리에는 원시 JSON, stdout/stderr, 명령, git SHA,
 입력·바이너리 해시, 정책 해시가 같이 있습니다.
@@ -101,7 +118,7 @@ run 디렉터리에는 원시 JSON, stdout/stderr, 명령, git SHA,
 ## 한계
 
 공유 호스트 한 대이고, 주파수와 터보는 고정하지 않았습니다.
-UNPINNED에서 `cpu_core`는 E-core 시간을 세지 않습니다. generic cache
+HYBRID에서 `cpu_core`는 E-core 시간을 세지 않습니다. generic cache
 이벤트를 다른 CPU에도 그대로 쓰는 LLC나 대역폭이라고 쓰지 않습니다.
 CloudSuite는 단일 호스트 Docker bridge, 고정 offered load입니다.
 보고하는 p99는 interval p99의 중앙값이지, 요청 전체를 모은 p99가

@@ -14,6 +14,9 @@ tar -xzf vendor/downloads/parsec-3.0-core.tar.gz -C vendor/parsec --skip-old-fil
 cat vendor/downloads/parsec-3.0-input-native.tar.gz.{0..4} > vendor/downloads/parsec-3.0-input-native.tar.gz
 tar -xzf vendor/downloads/parsec-3.0-input-native.tar.gz -C vendor/parsec --skip-old-files --strip-components=1
 sha256sum vendor/downloads/* > artifacts/setup/parsec-input-sha256.txt
-for package in blackscholes canneal dedup streamcluster; do
+for package in blackscholes canneal dedup streamcluster freqmine swaptions; do
+  if find vendor/parsec/pkgs -path "*/${package}/inst/amd64-linux.gcc/bin/${package}" | grep -q .; then
+    continue
+  fi
   (cd vendor/parsec && CFLAGS='-O3 -g' CXXFLAGS='-O3 -g' bin/parsecmgmt -a build -p "$package" -c gcc -n 4) > "artifacts/setup/parsec-build-$package.log" 2>&1
 done

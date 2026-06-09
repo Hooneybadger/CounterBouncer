@@ -3,14 +3,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p artifacts/setup vendor/cloudsuite-servers
 # Dedicated names/network; leave unrelated Docker workloads untouched.
-# The first campaign used counterbouncer-* names; keep those containers if present.
-if docker container inspect counterbouncer-dc-server >/dev/null 2>&1 \
+# The first campaign used metrictrust-* names; rename if the new names are free.
+if docker container inspect metrictrust-dc-server >/dev/null 2>&1 \
    && ! docker container inspect counterbouncer-dc-server >/dev/null 2>&1; then
-  docker rename counterbouncer-dc-server counterbouncer-dc-server
+  docker rename metrictrust-dc-server counterbouncer-dc-server
 fi
-if docker container inspect counterbouncer-dc-client >/dev/null 2>&1 \
+if docker container inspect metrictrust-dc-client >/dev/null 2>&1 \
    && ! docker container inspect counterbouncer-dc-client >/dev/null 2>&1; then
-  docker rename counterbouncer-dc-client counterbouncer-dc-client
+  docker rename metrictrust-dc-client counterbouncer-dc-client
 fi
 NET=counterbouncer-net
 if docker container inspect counterbouncer-dc-server >/dev/null 2>&1; then

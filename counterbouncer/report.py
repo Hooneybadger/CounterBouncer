@@ -4,7 +4,27 @@ from pathlib import Path
 import json
 from .model import save
 from .quality.stability import summarize
-from .quality.verdict import reason, verdict
+from .quality.verdict import reason, assemble
+
+
+def _cutoffs(policy, kind):
+    if kind == 'latency':
+        degrade = policy.get('cv_latency_degrade', policy.get('cv_degrade'))
+        reject = policy.get('cv_latency_reject', policy.get('cv_reject'))
+    else:
+        degrade = policy.get('cv_runtime_degrade', policy.get('cv_degrade'))
+        reject = policy.get('cv_runtime_reject', policy.get('cv_reject'))
+    return degrade, reject
+
+
+def _variance_reasons(metric, observed, degrade, reject):
+    if observed['cv'] is None or degrade is None:
+        return []
+    if observed['cv'] <= degrade:
+        return []
+    severity = 'INVALID' if reject is not None and observed['cv'] > reject else 'DEGRADED'
+    return [reason('HIGH_RUN_VARIANCE', severity, metric=metric, cv=observed['cv'],
+                   degrade=degrade, reject=reject)]
 
 
 def build_report(paths, policy, output):
@@ -26,14 +46,16 @@ def build_report(paths, policy, output):
             statistical_reasons.append(reason('INSUFFICIENT_REPEATS', 'DEGRADED', actual=len(values), required=required))
         latency_stats = summarize(r['workload']['outcome']['p99_latency_ms'] for r in successful
                                   if 'p99_latency_ms' in r['workload']['outcome'])
-        for metric, observed in [(key, stats), ('p99_latency_ms', latency_stats)]:
-            if observed['cv'] is not None and observed['cv'] > policy['cv_degrade']:
-                severity = 'REJECT' if observed['cv'] > policy['cv_reject'] else 'DEGRADED'
-                statistical_reasons.append(reason('HIGH_RUN_VARIANCE', severity, metric=metric, cv=observed['cv'],
-                                                 degrade=policy['cv_degrade'], reject=policy['cv_reject']))
+        if suite == 'cloudsuite':
+            # Fixed offered load: throughput CV is not a quality signal.
+            degrade, reject = _cutoffs(policy, 'latency')
+            statistical_reasons.extend(_variance_reasons('p99_latency_ms', latency_stats, degrade, reject))
+        else:
+            degrade, reject = _cutoffs(policy, 'runtime')
+            statistical_reasons.extend(_variance_reasons(key, stats, degrade, reject))
         for r in members:
             r = copy.deepcopy(r)
-            r['quality_with_stability'] = verdict(r['quality']['reasons'] + statistical_reasons)
+            r['quality_with_stability'] = assemble(r['quality']['reasons'] + statistical_reasons)
             annotated.append(r)
         summary.append({'suite': suite, 'workload': name, 'condition': condition, 'outcome_key': key,
                         'attempts': len(members), 'outcome_statistics': stats,

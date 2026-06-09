@@ -274,6 +274,86 @@ cache/bandwidth metric, CXL 성능, 정의되지 않은 정확도.
 
 ---
 
+## 12. native-holdout-v2
+
+실험 ID `native-holdout-v2`. 기계 감사
+`artifacts/completion-audit-native-holdout-v2.json` → **PASS** (270회,
+문제 0). REFERENCE는 `native-reference-v2`, 40회, 같은 감사 PASS.
+숫자는 `artifacts/analysis/report-native-holdout-v2.json`과
+`reference-v2.json`에서만 가져왔습니다.
+
+정책은 `configs/experiment_v2.yaml`입니다. runtime CV degrade는
+0.5086입니다. CLEAN kernel `cache-large` CV 0.1695에 3× 규칙을 적용한
+값이며, holdout을 보고 다시 맞추지 않았습니다. 이 컷에서는 그룹
+`HIGH_RUN_VARIANCE`가 붙지 않았습니다. latency CV는 freeze 전에 적어 둔
+0.10 / 0.25입니다.
+
+PARSEC CLEAN 전에 프로젝트 CloudSuite 컨테이너를 끊었습니다.
+
+| 항목 | 실측 |
+|---|---|
+| Holdout | 270회 (PARSEC 240 + CloudSuite 30). warmup 별도. 실행 실패 0 |
+| Integrity | VALID 160, INVALID 110 |
+| Context | CONTROLLED 100, CONTAMINATED 125, UNKNOWN 45 |
+| 접은 판정 | ACCEPT 70, DEGRADED 90, REJECT 110 |
+| MULTIPLEX | 45회 전부 integrity INVALID. 최소 `pcnt-running` 중앙값 30% |
+| HYBRID | 45회 전부 integrity INVALID, context UNKNOWN |
+| CloudSuite | 30회 전부 integrity INVALID (`AFFINITY_ESCAPE`, `CROSS_CORE_TYPE`) |
+
+PARSEC CLEAN 40회 가운데 blackscholes·canneal·swaptions 30회는
+VALID / CONTROLLED입니다. freqmine 10회는 VALID이지만 CPU `0`으로 나가
+context CONTAMINATED입니다. PCORE(허용 집합 `0-15`)에서는 freqmine도
+VALID / CONTROLLED입니다.
+
+조건당 45회 (PARSEC 40 + CloudSuite 5).
+
+| 조건 | ACCEPT | DEGRADED | REJECT |
+|---|---:|---:|---:|
+| CLEAN | 30 | 10 | 5 |
+| MULTIPLEX | 0 | 0 | 45 |
+| SMT | 0 | 40 | 5 |
+| MEMORY | 0 | 40 | 5 |
+| PCORE | 40 | 0 | 5 |
+| HYBRID | 0 | 0 | 45 |
+
+최소 `cpu_core` `pcnt-running` 중앙값: CLEAN/SMT/MEMORY/PCORE 100%,
+MULTIPLEX 30%, PARSEC HYBRID 99%, CloudSuite HYBRID 0%.
+
+PARSEC median runtime (초). 변화율은 해당 workload CLEAN median 대비.
+
+| Workload | CLEAN | MULTIPLEX | SMT | MEMORY | PCORE | HYBRID |
+|---|---:|---:|---:|---:|---:|---:|
+| blackscholes | 12.95 s | +0.4% | **+45.8%** | +2.2% | −0.0% | +0.3% |
+| canneal | 40.57 s | +0.2% | +14.4% | **+73.8%** | −0.4% | −0.4% |
+| freqmine | 50.83 s | +0.4% | +35.1% | +2.9% | +0.1% | +0.2% |
+| swaptions | 15.62 s | +0.8% | +61.8% | +1.4% | +0.5% | +0.5% |
+
+CloudSuite Data Caching (고정 100,000 req/s):
+
+| 조건 | Median throughput | Throughput CV | Median interval-p99 | p99 vs CLEAN |
+|---|---:|---:|---:|---:|
+| CLEAN | 100021.4 | 0.00% | 0.0221 ms | — |
+| MULTIPLEX | 100022.6 | 0.00% | 0.0251 ms | +13.6% |
+| SMT | 100022.1 | 0.83% | 0.0271 ms | +22.6% |
+| MEMORY | 100027.4 | 0.00% | 0.0301 ms | +36.2% |
+| PCORE | 100022.3 | 0.00% | 0.0231 ms | +4.5% |
+| HYBRID | 100022.5 | 0.00% | 0.0471 ms | **+113.1%** |
+
+REFERENCE `{cpu_core/cycles, cpu_core/instructions}` IPC 중앙값 대비
+MULTIPLEX IPC: blackscholes +0.02%, swaptions −0.22%. multiplex
+`pcnt-running` 중앙값은 30%입니다. 절대 참값이 아닙니다.
+
+holdout run의 `git_dirty`는 전부 true입니다. 측정 중에 게이트 코드가
+아직 커밋되지 않은 상태였습니다. 정책 파일 해시는 각 `run.json`에
+있습니다.
+
+![v2 두 축](figures/figure_v2_architecture.png)
+![v2 축](figures/figure_v2_axes.png)
+![v2 애플리케이션](figures/figure_v2_outcome.png)
+![v2 REFERENCE](figures/figure_v2_reference.png)
+
+---
+
 ## 출처
 
 [sources.md](sources.md). Azure: Freischuetz, Kanellis, Kroth,

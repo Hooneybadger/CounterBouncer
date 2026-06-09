@@ -1,4 +1,5 @@
 # Explicit P-core PMU on this hybrid host; generic architectural perf aliases.
+# The first group is the v2 REFERENCE / ipc profile (minimal grouped pair).
 groups:
   - '{cpu_core/cycles/,cpu_core/instructions/}'
   - '{cpu_core/branches/,cpu_core/branch-misses/}'

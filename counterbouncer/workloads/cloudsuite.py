@@ -4,6 +4,8 @@ from pathlib import Path
 import statistics
 import subprocess
 from .base import Workload
+from ..host import server_container, client_container
+from ..topology import affinity_for, probe
 
 
 def parse(text):
@@ -28,17 +30,25 @@ def parse(text):
             'interval_count': len(steady), 'intervals': steady}
 
 
-def make(condition, seconds=15, rps=100000):
+def make(condition, seconds=15, rps=100000, cpus=None):
     root = Path(__file__).resolve().parents[2]
-    cpus = '0-31' if condition == 'UNPINNED' else '2,4,6,8'
-    subprocess.run(['docker', 'update', '--cpuset-cpus', cpus, 'counterbouncer-dc-server'], check=True, capture_output=True)
-    pid = int(subprocess.check_output(['docker', 'inspect', '-f', '{{.State.Pid}}', 'counterbouncer-dc-server'], text=True))
-    version = subprocess.check_output(['docker', 'inspect', '-f', '{{.Image}}', 'counterbouncer-dc-server'], text=True).strip()
-    command = ['docker', 'exec', '-t', 'counterbouncer-dc-client', 'timeout', '--signal=TERM', str(seconds),
+    server = server_container()
+    client = client_container()
+    if not server or not client:
+        raise FileNotFoundError('CloudSuite containers are not installed; run scripts/setup_cloudsuite.sh')
+    if cpus is None:
+        cpus = affinity_for(condition, '2,4,6,8')
+    if cpus is None:
+        cpus = probe()['present_spec'] or '0-31'
+    subprocess.run(['docker', 'update', '--cpuset-cpus', cpus, server], check=True, capture_output=True)
+    pid = int(subprocess.check_output(['docker', 'inspect', '-f', '{{.State.Pid}}', server], text=True))
+    version = subprocess.check_output(['docker', 'inspect', '-f', '{{.Image}}', server], text=True).strip()
+    command = ['docker', 'exec', '-t', client, 'timeout', '--signal=TERM', str(seconds),
                '/bin/bash', '/entrypoint.sh', '--m=RPS', '--S=28', '--g=0.8', '--c=200', '--w=8', '--T=1', f'--r={rps}']
     return Workload('cloudsuite', 'data-caching', 'twitter-28x', command, str(root), version, parse,
                     accepted_returncodes=[0, 124], attach_pid=pid,
                     metadata={'server_threads': 4, 'server_memory_mb': 10240, 'client_cpus': '16-23',
                               'target_rps': rps, 'duration_s': seconds, 'server_cpus': cpus,
+                              'server_container': server, 'client_container': client,
                               'measurement_target': 'host PID of server, not Docker CLI',
                               'network': 'single-host dedicated Docker bridge'})

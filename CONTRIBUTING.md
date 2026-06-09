@@ -6,7 +6,8 @@ and [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 ## Before you start
 
 - Do not invent benchmark numbers, inject noise into results, or retune
-  `configs/experiment.yaml` after looking at holdout data.
+  a frozen policy (`configs/experiment.yaml`, `configs/experiment_v2.yaml`)
+  after looking at that campaign's holdout.
 - Do not add a profiler UI, dashboard, or LLM “auto diagnosis”.
 - Real application evidence lives under `artifacts/` and is not in git.
   Reproduce with `experiments/README.md` on a machine you control.

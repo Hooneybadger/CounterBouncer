@@ -5,12 +5,19 @@ import tarfile
 from .base import Workload
 from ..model import sha256
 
-LAYOUT = {'blackscholes': 'apps', 'canneal': 'kernels', 'dedup': 'kernels', 'streamcluster': 'kernels'}
+NO_INPUT_ARCHIVE = {'streamcluster', 'swaptions'}
+LAYOUT = {
+    'blackscholes': 'apps', 'canneal': 'kernels', 'dedup': 'kernels', 'streamcluster': 'kernels',
+    'freqmine': 'apps', 'swaptions': 'apps',
+}
 ARGS = {
- 'blackscholes': ['4', 'in_10M.txt', 'prices.txt'],
- 'canneal': ['4', '15000', '2000', '2500000.nets', '6000'],
- 'dedup': ['-c', '-p', '-v', '-t', '4', '-i', 'FC-6-x86_64-disc1.iso', '-o', 'output.dat.ddp'],
- 'streamcluster': ['10', '20', '128', '1000000', '200000', '5000', 'none', 'output.txt', '4']}
+    'blackscholes': ['4', 'in_10M.txt', 'prices.txt'],
+    'canneal': ['4', '15000', '2000', '2500000.nets', '6000'],
+    'dedup': ['-c', '-p', '-v', '-t', '4', '-i', 'FC-6-x86_64-disc1.iso', '-o', 'output.dat.ddp'],
+    'streamcluster': ['10', '20', '128', '1000000', '200000', '5000', 'none', 'output.txt', '4'],
+    'freqmine': ['webdocs_250k.dat', '11000'],
+    'swaptions': ['-ns', '128', '-sm', '1000000', '-nt', '4'],
+}
 
 
 def parse_output(name, text, workdir=None):
@@ -22,6 +29,16 @@ def parse_output(name, text, workdir=None):
         return None
     if name == 'dedup' and 'Effective compression factor:' not in text:
         return None
+    if name == 'freqmine':
+        if 'the data preparation cost' not in text or 'the FPgrowth cost' not in text:
+            return None
+        if 'Not enough memory' in text or 'not enough memory' in text:
+            return None
+    if name == 'swaptions':
+        if 'Number of Simulations:' not in text or 'SwaptionPrice:' not in text:
+            return None
+        if 'Fewer swaptions than threads' in text or 'Numerical Recipes run-time error' in text:
+            return None
     if name == 'streamcluster':
         expected = int(ARGS[name][3])
         reads = [int(n) for n in re.findall(r'read (\d+) points', text)]
@@ -47,9 +64,9 @@ def make(name):
     archive = package / 'inputs/input_native.tar'
     marker = workdir / '.extracted'
     if not marker.exists():
-        if name == 'streamcluster':
-            # Official native.runconf uses 'none': the application generates its input.
-            marker.write_text('official-native-internal-generator:' + sha256(package / 'parsec/native.runconf'))
+        if name in NO_INPUT_ARCHIVE:
+            # Official native.runconf has no input archive (internal generator or CLI-only).
+            marker.write_text('official-native-no-input-archive:' + sha256(package / 'parsec/native.runconf'))
         else:
             with tarfile.open(archive) as tar:
                 tar.extractall(workdir, filter='data')

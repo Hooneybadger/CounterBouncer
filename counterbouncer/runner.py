@@ -6,15 +6,21 @@ import subprocess
 import time
 import yaml
 from .environment import snapshot
+from .host import project_containers_running
 from .model import now, save, sha256, git_state
 from .perf_parser import parse_perf, PerfParseError
+from .placement import PlacementSampler
 from .quality.rules import analyze
+from .topology import affinity_for, hybrid_exposed, parse_cpu_list, probe
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def event_spec(condition):
+def event_spec(condition, profile='full'):
     config = yaml.safe_load((ROOT / 'configs/events_generic.yaml').read_text())
+    if profile == 'ipc' or condition == 'REFERENCE':
+        groups = [config['groups'][0]]
+        return ','.join(groups + config['software'])
     groups = list(config['groups'])
     if condition == 'MULTIPLEX':
         for i in range(config['multiplex_extra_groups']):
@@ -32,39 +38,62 @@ def stop(process):
             process.wait()
 
 
-def measure(workload, condition, run_id, directory, policy_path, cpus='2,4,6,8', timeout=3600):
+def _cpu_list(spec):
+    if spec is None:
+        return []
+    if isinstance(spec, (list, tuple)):
+        return [str(x).strip() for x in spec if str(x).strip()]
+    return [part.strip() for part in str(spec).split(',') if part.strip()]
+
+
+def measure(workload, condition, run_id, directory, policy_path, cpus='2,4,6,8', timeout=3600,
+            event_profile=None, smt_cpus=None, memory_cpus=None):
     directory = Path(directory).resolve() / run_id
     directory.mkdir(parents=True, exist_ok=False)
     policy_doc = yaml.safe_load(Path(policy_path).read_text())
     if workload.suite != 'calibration' and policy_doc.get('status') != 'frozen':
         raise ValueError('real holdout requires frozen policy')
+    profile = event_profile or ('ipc' if condition == 'REFERENCE' else 'full')
+    topo = probe()
+    requested = cpus if cpus is not None else affinity_for(condition, '2,4,6,8')
+    if condition in ('HYBRID', 'UNPINNED'):
+        requested = None
     raw = directory / 'perf.jsonl'
     stdout_path, stderr_path = directory / 'stdout.txt', directory / 'stderr.txt'
-    perf = ['perf', 'stat', '-j', '-o', str(raw), '-e', event_spec(condition)]
+    perf = ['perf', 'stat', '-j', '-o', str(raw), '-e', event_spec(condition, profile)]
     if workload.attach_pid:
         perf += ['-p', str(workload.attach_pid)]
     command = perf + ['--'] + workload.command
-    if condition != 'UNPINNED' and not workload.attach_pid:
-        command = ['taskset', '-c', cpus] + command
+    if requested and not workload.attach_pid:
+        command = ['taskset', '-c', requested] + command
     before = snapshot()
     state = git_state()
-    record = {'schema_version': 1, 'run_id': run_id, 'timestamp': now(),
+    record = {'schema_version': 2, 'run_id': run_id, 'timestamp': now(),
               'git_commit': state['commit'], 'git_dirty': state['dirty'],
-              'condition': condition, 'policy_sha256': sha256(policy_path),
+              'condition': condition, 'event_profile': profile,
+              'policy_sha256': sha256(policy_path),
               'policy': policy_doc, 'command': command, 'system': before,
-              'requested_affinity': None if condition == 'UNPINNED' else cpus,
+              'requested_affinity': requested,
+              'requested_cpus': parse_cpu_list(requested) if requested else [],
+              'core_cpus': topo['core_cpus'], 'atom_cpus': topo['atom_cpus'],
+              'numa_nodes': topo['numa_nodes'],
+              'project_containers': project_containers_running(),
               'workload': {'suite': workload.suite, 'name': workload.name, 'input': workload.input,
                            'command': workload.command, 'cwd': workload.cwd, 'version': workload.version,
                            'metadata': workload.metadata, 'outcome': None},
               'accepted_returncodes': workload.accepted_returncodes,
               'attach_pid': workload.attach_pid, 'events': [],
-              'hybrid_unpinned': condition == 'UNPINNED',
+              'hybrid_unpinned': condition in ('UNPINNED', 'HYBRID'),
+              'hybrid_exposed': hybrid_exposed(requested, topo),
               'phase': 'whole_application' if not workload.attach_pid else 'server_during_client_command',
               'interference': [], 'status': 'running'}
     save(directory / 'run.json', record)
     processes, handles = [], []
+    sampler = PlacementSampler()
     try:
-        interference_cpus = ['3', '5', '7', '9'] if condition == 'SMT' else ['24', '25', '26', '27'] if condition == 'MEMORY' else []
+        smt = _cpu_list(smt_cpus if smt_cpus is not None else ['3', '5', '7', '9'])
+        mem = _cpu_list(memory_cpus if memory_cpus is not None else ['24', '25', '26', '27'])
+        interference_cpus = smt if condition == 'SMT' else mem if condition == 'MEMORY' else []
         for cpu in interference_cpus:
             kind, mode = ('branch', 'random') if condition == 'SMT' else ('memory', 'stream')
             cmd = ['taskset', '-c', cpu, 'python3', str(ROOT / 'scripts/interference.py'), kind, mode]
@@ -79,6 +108,7 @@ def measure(workload, condition, run_id, directory, policy_path, cpus='2,4,6,8',
             start = time.monotonic()
             process = subprocess.Popen(command, cwd=workload.cwd, stdout=out, stderr=err,
                                        env={**os.environ, 'LC_ALL': 'C', 'OMP_NUM_THREADS': '4'}, start_new_session=True)
+            sampler.start(workload.attach_pid or process.pid)
             try:
                 code = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -90,6 +120,8 @@ def measure(workload, condition, run_id, directory, policy_path, cpus='2,4,6,8',
                 raise
             record['wall_runtime_s'] = time.monotonic() - start
             record['returncode'] = code
+        sampler.stop()
+        record['placement'] = sampler.summary()
         record['interference_failed'] = any(p.poll() is not None for p in processes)
         output = stdout_path.read_text() + '\n' + stderr_path.read_text()
         try:
@@ -111,6 +143,7 @@ def measure(workload, condition, run_id, directory, policy_path, cpus='2,4,6,8',
         record['quality'], record['metrics'] = analyze(record, policy_doc['policy'])
         record['status'] = 'complete'
     finally:
+        sampler.stop()
         for p in processes:
             stop(p)
         for h in handles:

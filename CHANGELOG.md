@@ -4,6 +4,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/) for the Python package API,
 not for measurement campaigns (those are named, e.g. `native-holdout-v1`).
 
+## [0.2.0] — 2026-06-09
+
+### Changed
+
+- Quality gate is two axes: measurement integrity (`VALID` / `DEGRADED` / `INVALID`) and
+  experiment context (`CONTROLLED` / `CONTAMINATED` / `UNKNOWN`). The old one-word verdict is
+  only a collapse of those axes.
+- Within-pin `cpu-migrations` is no longer treated as measurement degradation.
+- CloudSuite group variance uses latency/p99, not the batch-runtime CV cutoff.
+- `native-holdout-v1` and `configs/experiment.yaml` stay frozen. v2 uses
+  `configs/experiment_v2.yaml` and a new holdout.
+
+### Added
+
+- PCORE vs HYBRID conditions (v1 UNPINNED split), minimal-group REFERENCE measurements,
+  placement sampling, and `scripts/prepare_baseline.py`.
+
 ## [0.1.0] — 2026-06-08
 
 Published name: **CounterBouncer**. Python package `counterbouncer`, CLI `bouncer`.

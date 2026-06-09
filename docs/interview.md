@@ -23,13 +23,16 @@
    참 숫자인지를 보지 않습니다.
 8. **CLEAN.** 설정 고정, pin된 CPU set, warmup, CounterBouncer 경쟁 부하
    없음. 호스트는 공유이고 보통의 OS 활동은 남습니다. CLEAN은 실험
-   조건이지 정답 라벨이 아닙니다. CPU 네 개로 pin해도 그 집합 안에서
-   `cpu-migrations`가 나오면 이 정책에서는 DEGRADED입니다.
+   조건이지 정답 라벨이 아닙니다. pin 집합 안의 `cpu-migrations`만으로는
+   integrity를 떨어뜨리지 않습니다. 허용 집합을 벗어나면
+   `AFFINITY_ESCAPE`입니다.
 9. **Affinity.** 쓸 수 있는 CPU를 정해서 토폴로지 변동을 줄입니다. CPU가
-   여러 개면 그 안에서 이동은 남습니다.
+   여러 개면 그 안에서 이동은 남습니다. 허용 집합을 벗어난 이동, P/E
+   이동, NUMA 이동은 따로 봅니다.
 10. **SMT.** sibling이 실행·캐시 자원을 나눕니다. 실제 경쟁 작업은
     PMU running이 좋아도 애플리케이션 시간을 바꿀 수 있습니다. 스케줄
-    품질만으로 모든 contention을 잡지 못합니다.
+    품질만으로 모든 contention을 잡지 못합니다. 이 경우는 integrity
+    VALID, context CONTAMINATED가 될 수 있습니다.
 11. **분산.** 실제 애플리케이션 행동이나 환경일 수 있고, 카운팅이
     틀렸다는 뜻은 아닙니다. 통계 판정은 반복 그룹을 말하고 run 단위
     하드 판정은 따로 남아 있습니다.

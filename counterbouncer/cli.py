@@ -12,7 +12,8 @@ def main():
     run.add_argument('suite', choices=['calibration'])
     run.add_argument('name', choices=['branch', 'cache', 'memory'])
     run.add_argument('--mode', required=True)
-    run.add_argument('--condition', default='CLEAN', choices=['CLEAN', 'MULTIPLEX', 'SMT', 'MEMORY', 'UNPINNED'])
+    run.add_argument('--condition', default='CLEAN',
+                     choices=['CLEAN', 'MULTIPLEX', 'SMT', 'MEMORY', 'UNPINNED', 'PCORE', 'HYBRID', 'REFERENCE'])
     run.add_argument('--run-id', required=True)
     run.add_argument('--output', default='artifacts/calibration')
     run.add_argument('--policy', default='configs/experiment.yaml')

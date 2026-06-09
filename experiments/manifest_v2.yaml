@@ -1,0 +1,30 @@
+schema_version: 2
+experiment_id: native-holdout-v2
+seed: 202609082
+policy: configs/experiment_v2.yaml
+preflight: artifacts/preflight/authorized/system.json
+cpus: '2,4,6,8'
+smt_siblings: '3,5,7,9'
+memory_interference_cpus: '24,25,26,27'
+conditions: [CLEAN, MULTIPLEX, SMT, MEMORY, PCORE, HYBRID]
+parsec:
+  workloads: [blackscholes, canneal, freqmine, swaptions]
+  input: native
+  threads: 4
+  repeats: 10
+  warmups: 1
+cloudsuite:
+  workload: data-caching
+  repeats: 5
+  warmups: 1
+  duration_s: 60
+  target_rps: 100000
+  scale: 28
+  server_memory_mb: 10240
+order: 'randomized condition order within each repetition block; suite/workload order fixed'
+labels: 'Generated from condition configuration, never handwritten bad/good labels'
+notes: >
+  PCORE allows migration across all P-cores. HYBRID allows P+E (partial cpu_core coverage).
+  v1 UNPINNED is split into those two. Policy freeze uses a new calibration directory.
+  Do not evaluate the new policy on native-holdout-v1.
+audit_figures: [figure_v2_architecture, figure_v2_axes, figure_v2_outcome]

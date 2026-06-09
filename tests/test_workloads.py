@@ -25,6 +25,13 @@ class Adapters(unittest.TestCase):
             'PARSEC Benchmark Suite\n-w \t\t\tcompression type: gzip/bzip2/none\n'))
         self.assertIsNotNone(parse_output(
             'dedup', 'PARSEC Benchmark Suite\nEffective compression factor:  2.00x\n'))
+        self.assertIsNone(parse_output('freqmine', 'PARSEC Benchmark Suite\nusage: freqmine'))
+        self.assertIsNotNone(parse_output(
+            'freqmine', 'PARSEC Benchmark Suite\nthe data preparation cost 1.0 seconds, the FPgrowth cost 2.0 seconds\n'))
+        self.assertIsNone(parse_output('swaptions', 'PARSEC Benchmark Suite\nUsage:'))
+        self.assertIsNotNone(parse_output(
+            'swaptions',
+            'PARSEC Benchmark Suite\nNumber of Simulations: 1000000,  Number of threads: 4 Number of swaptions: 128\nSwaption 0: [SwaptionPrice: 1.0 StdError: 0.0001]\n'))
         banner = 'PARSEC Benchmark Suite\n' + ''.join(f'read {n} points\n' for n in [200000] * 5)
         self.assertIsNotNone(parse_output('streamcluster', banner))
         self.assertIsNone(parse_output('streamcluster', banner + 'error reading data!\n'))
