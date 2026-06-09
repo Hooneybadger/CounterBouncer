@@ -1,232 +1,79 @@
-# CounterBouncer 결과 보고서
+# CounterBouncer results
 
-- 실험 ID: `native-holdout-v1`
-- 기계 감사: 로컬 `artifacts/completion-audit.json` → **PASS** (225회, 문제 0). 이 파일은 git에 없습니다.
-- 아래 숫자는 로컬 `artifacts/analysis/report.json`과 원시 `perf.jsonl`입니다. 분류 정확도와 PMU 절대 오차율은 없습니다. 개선율도 없습니다.
-
----
-
-## 1. 요약
-
-Linux PMU 측정이 성능 진단에 쓸 수 있는 품질인지
-`ACCEPT / DEGRADED / REJECT`로 판정하는 quality gate를 PARSEC native
-4종과 CloudSuite Data Caching으로 검증했습니다.
-
-| 항목 | 실측 |
-|---|---|
-| Holdout | 225회 (PARSEC 200 + CloudSuite 25). warmup 별도. 실행 실패 0 |
-| 최종 판정 | ACCEPT 15, DEGRADED 160, REJECT 50 |
-| CLEAN | 45회 전부 DEGRADED (`CPU_MIGRATION`) |
-| MULTIPLEX | 45회 전부 REJECT. 최소 `pcnt-running` 중앙값 30% |
-| ACCEPT가 나온 곳 | blackscholes SMT 9회, blackscholes MEMORY 6회뿐 |
-
-MULTIPLEX는 runtime이 거의 그대로인데 측정은 REJECT입니다.
-blackscholes SMT는 품질이 ACCEPT여도 CLEAN 대비 median runtime이
-+45.3%입니다. CloudSuite는 고정 offered load라 throughput CV가 0.00%이고
-interval-p99는 UNPINNED에서 CLEAN 대비 +121.7%입니다.
-
-이 관계는 연관입니다. 게이트가 간섭을 다 잡는다는 뜻은 아닙니다.
+Current campaigns: `native-holdout-v2` and `native-cloudsuite-v2.1`.
+v1 is a retrospective at the end. Numbers come from local
+`artifacts/`. There is no classification accuracy and no PMU
+absolute-error rate. There is no "improvement rate" either.
 
 ---
 
-## 2. 실험 환경
+## 1. Summary
 
-| 항목 | 값 |
-|---|---|
-| Host | `gpuidblab`, systemd-detect-virt `none` (bare-metal) |
-| CPU | Intel Core i9-14900K, 32 logical CPU, SMT on, NUMA 1 |
-| Pinning | P-core `2,4,6,8` (UNPINNED는 0–31) |
-| SMT 간섭 | sibling `3,5,7,9`에서 실제 calibration process |
-| Memory 간섭 | `24,25,26,27`에서 실제 STREAM-like process |
-| OS / perf | Linux 7.0.0-28-generic, Python 3.12.3, `perf stat -j` |
-| 권한 | 최초 `perf_event_paranoid=4`로 BLOCKER A. 임시로 1 설정 후 재검사. 최초 probe는 로컬 `artifacts/preflight/`에 보존 |
-| 공유 호스트 | 기존 Docker 워크로드 잔류. PARSEC holdout 동안 CloudSuite memcached도 상주. CLEAN은 CounterBouncer 추가 간섭이 없다는 뜻이다. 전용 머신은 아니다 |
+The gate has two axes. Measurement integrity is whether the counters
+were collected as a technical matter. Experiment context is whether
+that run is comparable. The one-word `ACCEPT` / `DEGRADED` /
+`REJECT` collapses the two.
+
+`native-holdout-v2` is four PARSEC native apps plus CloudSuite Data
+Caching, 270 runs, i9-14900K bare metal. Warmups separate. Zero
+launch failures. Audit PASS. Integrity: VALID 160, INVALID 110.
+Context: CONTROLLED 100, CONTAMINATED 125, UNKNOWN 45. Collapsed
+verdict: ACCEPT 70, DEGRADED 90, REJECT 110.
+
+45 runs per condition. All 5 REJECT are CloudSuite. PARSEC
+MULTIPLEX runtime is almost CLEAN, integrity INVALID.
+`pcnt-running` median 30%. REFERENCE IPC: blackscholes +0.02%,
+swaptions -0.22%. INVALID means coverage missed the bar, not a
+proof that IPC is wrong.
+
+All 30 v2 CloudSuite runs are INVALID: server threads left the pin.
+Those 30 stay in the record. `native-cloudsuite-v2.1` pins threads
+and adds CLEAN x5 / MEMORY x5. Policy is unchanged. CLEAN is 5/5
+VALID/CONTROLLED; MEMORY is 5/5 VALID/CONTAMINATED. MEMORY p99 is
++36.2% vs CLEAN 0.0221 ms.
 
 ---
 
-## 3. 방법
+## 2. Structure
 
-### 3.1 Workload
+![v2 two axes](figures/figure_v2_architecture.png)
 
-| Suite | Workload | Input / 설정 | 반복 |
-|---|---|---|---|
-| PARSEC 3.0 | blackscholes, canneal, dedup, streamcluster | native, 4 threads, whole application (I/O 포함) | 조건당 10회 + warmup 1 |
-| CloudSuite | data-caching | Twitter 28×, memcached 10 GB / 4 threads, client 8 threads, 200 conn, 100,000 req/s, timeout 60 s | 조건당 5회 + warmup 1 |
-
-PARSEC는 직접 바이너리, CloudSuite PMU는 서버 host PID입니다. 조건
-순서는 repetition block 안에서 무작위화했습니다. 라벨은 manifest에서
-만들었고, good/bad는 손으로 안 넣었습니다.
-
-### 3.2 조건
-
-| 조건 | 내용 |
-|---|---|
-| CLEAN | pin, CounterBouncer 추가 부하 없음 |
-| MULTIPLEX | 실제 event 수를 늘려 time multiplexing 유도 |
-| SMT | pin된 코어의 sibling에서 실제 competing process |
-| MEMORY | 별도 CPU에서 실제 memory kernel |
-| UNPINNED | affinity 제거. hybrid `cpu_core`는 E-core 시간을 못 셈 |
-
-선택 조건 E5(frequency/power)는 안 했습니다.
-
-### 3.3 판정 정책 (holdout 전 freeze)
-
-Calibration 80회를 모은 뒤 정책을 고정했습니다. holdout을 본 뒤에는
-그대로 뒀습니다.
-
-| 규칙 | 값 | 비고 |
+| Measurement integrity | Experiment context | Use |
 |---|---|---|
-| PMU running DEGRADED / REJECT | 90% / 50% | 후보 heuristic, 업계 표준 아님 |
-| 임의 `cpu-migrations` | DEGRADED | 4-CPU pin 안 이동도 포함 |
-| CV DEGRADED / REJECT | 0.05115 / 0.20 | `max(0.05, 3× max CLEAN calibration CV)` |
-| 그룹 분산 | `HIGH_RUN_VARIANCE` | per-run hard verdict와 분리 |
+| VALID | CONTROLLED | diagnosis and comparison |
+| VALID | CONTAMINATED | measurement holds; compare with care |
+| INVALID | (any) | do not diagnose from it |
 
-정성 확인 (CLEAN calibration 중앙값, `cpu_core`):
+INVALID collapses to REJECT. VALID and CONTROLLED collapse to
+ACCEPT. Everything else is DEGRADED.
 
-- branch-misses: predictable 8,192.0 vs random 62,800,383.5
-- cache-misses: small working set 6,074.5 vs large 29,648,199.5
+Migrations inside the pin do not, by themselves, drop integrity.
+Affinity escape, P/E movement, and NUMA movement are tracked
+separately. PCORE is `0-15`. HYBRID is every present CPU. REFERENCE
+is the minimal group `{cpu_core/cycles, cpu_core/instructions}`.
+Not ground truth.
 
-공식 STREAM C는 freeze 이후 pipeline check로만 돌렸습니다. real-app
-결과에는 안 넣었습니다.
-
----
-
-## 4. Holdout 결과
-
-### 4.1 판정 분포
-
-조건당 45회 (PARSEC 40 + CloudSuite 5).
-
-| 조건 | ACCEPT | DEGRADED | REJECT |
-|---|---:|---:|---:|
-| CLEAN | 0 | 45 | 0 |
-| MULTIPLEX | 0 | 0 | 45 |
-| SMT | 9 | 36 | 0 |
-| MEMORY | 6 | 39 | 0 |
-| UNPINNED | 0 | 40 | 5 |
-
-UNPINNED REJECT 5회는 전부 CloudSuite입니다
-(`PARTIAL_HYBRID_PMU_COVERAGE` 외에 스케줄링 coverage 문제). ACCEPT
-15회는 모두 blackscholes입니다.
-
-![Figure 4. 조건별 판정](figures/figure4_verdicts.png)
-
-Reason code (한 run에 여러 개 가능): `LOW_PMU_RUNNING_RATIO` 300,
-`CPU_MIGRATION` 210, `PARTIAL_HYBRID_PMU_COVERAGE` 45,
-`HIGH_RUN_VARIANCE` 20.
-
-`HIGH_RUN_VARIANCE`는 CloudSuite interval-p99 그룹 CV가 고정 heuristic을
-넘긴 4개 조건(CLEAN/MEMORY/SMT/UNPINNED)에 붙었습니다. throughput CV는
-0.00%입니다. 런타임 CV를 latency에 그대로 쓴 건 한계입니다.
-
-### 4.2 PMU scheduling
-
-최소 `cpu_core` `pcnt-running`:
-
-| 조건 | 중앙값 | 최소 |
-|---|---:|---:|
-| CLEAN | 100% | 100% |
-| SMT | 100% | 100% |
-| MEMORY | 100% | 100% |
-| MULTIPLEX | 30% | 30% |
-| UNPINNED | 99% | 0% |
-
-![Figure 2. multiplexing과 derived metric 반복성](figures/figure2_multiplexing.png)
-
-MULTIPLEX는 요청 event가 늘어난 실제 multiplexing입니다. JSON에 숫자를
-끼워 넣은 게 아닙니다.
-
-### 4.3 애플리케이션 측정 (CLEAN median 대비)
-
-PARSEC median runtime (초). 변화율은 해당 workload CLEAN median 대비.
-
-| Workload | CLEAN | MULTIPLEX | SMT | MEMORY | UNPINNED |
-|---|---:|---:|---:|---:|---:|
-| blackscholes | 12.94 s | +0.8% | **+45.3%** | +0.9% | +0.5% |
-| canneal | 43.10 s | +1.0% | +13.6% | **+69.5%** | −0.6% |
-| dedup | 5.63 s | 0.0% | +35.6% | +7.2% | −13.4% |
-| streamcluster | 74.59 s | −1.3% | −4.8% | +27.9% | +0.2% |
-
-반복 CV (표본 표준편차/평균): canneal CLEAN이 4.10%로 가장 높습니다.
-나머지는 대개 그 아래입니다. 게이트 CV DEGRADED 컷(5.115%)을 PARSEC
-runtime이 넘긴 그룹은 없습니다.
-
-CloudSuite Data Caching (고정 100,000 req/s, interval 53개/run, 첫 2
-interval 제외):
-
-| 조건 | Median throughput (req/s) | Throughput CV | Median interval-p99 (ms) | p99 vs CLEAN |
-|---|---:|---:|---:|---:|
-| CLEAN | 100022.0 | 0.00% | 0.02210 | — |
-| MULTIPLEX | 100022.0 | 0.00% | 0.02410 | +9.0% |
-| SMT | 100022.3 | 0.00% | 0.02810 | +27.1% |
-| MEMORY | 100028.7 | 0.00% | 0.03310 | +49.8% |
-| UNPINNED | 100022.5 | 0.00% | 0.04900 | **+121.7%** |
-
-보고된 p99는 interval p99의 반복 간 중앙값입니다.
-
-![Figure 3. 반복 CV](figures/figure3_stability.png)
-
-![Figure 5. 판정과 애플리케이션 시간](figures/figure5_outcome.png)
-
----
-
-## 5. Azure 외부 자료
-
-Azure VM Noise Dataset 2024: 776 CSV partition, 7,037,220 observations,
-invalid 0, long/short 매칭 364쌍.
-
-매칭 partition의 median CV: long-lived 0.033, short-lived 0.059.
-
-![Azure](figures/azure_dispersion.png)
-
-로컬 PMU ground truth가 아닙니다. CounterBouncer 판정 정확도 계산에도
-안 썼습니다. 장기간 cloud benchmark에도 변동이 있다는 외부 맥락만
-봅니다.
-
----
-
-## 6. 실패·중단 기록
-
-| 사건 | 조치 |
+| Item | Value |
 |---|---|
-| `perf_event_paranoid=4`, 기본 event 9개 권한 실패 | BLOCKER A로 중단 후 권한 설정, 재검사 READY. 최초 probe는 로컬 `artifacts/preflight/`에 보존 |
-| Calibration이 CloudSuite sanity와 겹침 | 해당 회차 제외, `artifacts/calibration-development-overlap` 보존, 별도 80회 재수집 후 freeze |
-| CloudSuite 비TTY 버퍼링 | `docker exec -t`로 공식 loader 통계 보존 |
-| 세션 종료로 `parsec-canneal-unpinned-r02` 미완료 | 측정에서 뺐습니다. `artifacts/interrupted/`에 보존 후 재시도 |
-| PARSEC 종료 직후 15 s CloudSuite가 잠깐 실행됨 | 60 s로 개정한 뒤라 15 s holdout은 제외. `artifacts/interrupted/cloudsuite-15s-before-amendment` 보존. 60 s warmup은 interval 53개 |
+| Host | `gpuidblab`, bare-metal, i9-14900K, 32 logical CPU, SMT on |
+| Pin | P-core `2,4,6,8`. SMT interference `3,5,7,9`. Memory `24,25,26,27` |
+| Policy | `configs/experiment_v2.yaml`, frozen before holdout |
+| runtime CV degrade | 0.5086. 3x CLEAN kernel `cache-large` CV 0.1695 |
+| latency CV | 0.10 / 0.25, written before freeze |
 
-실행 실패로 버린 holdout run은 없습니다.
+Pin and events: [methodology.md](methodology.md).
 
 ---
 
-## 7. native-holdout-v2
+## 3. Current results
 
-실험 ID `native-holdout-v2`. 기계 감사
-`artifacts/completion-audit-native-holdout-v2.json` → **PASS** (270회,
-문제 0). REFERENCE는 `native-reference-v2`, 40회, 같은 감사 PASS.
-아래 숫자는 `artifacts/analysis/report-native-holdout-v2.json`과
-`reference-v2.json`입니다.
+Experiment ID `native-holdout-v2`. Machine audit
+`completion-audit-native-holdout-v2.json` -> **PASS** (270 runs,
+issues 0). Numbers: `report-native-holdout-v2.json`.
 
-정책은 `configs/experiment_v2.yaml`입니다. runtime CV degrade는
-0.5086입니다. CLEAN kernel `cache-large` CV 0.1695에 3× 규칙을 적용한
-값입니다. holdout을 보고 이 값은 안 바꿨습니다. 이 임계로는 그룹
-`HIGH_RUN_VARIANCE`가 안 붙었습니다. latency CV는 freeze 전에 적어 둔
-0.10 / 0.25입니다.
+Project CloudSuite containers were stopped before PARSEC CLEAN.
 
-PARSEC CLEAN 전에 프로젝트 CloudSuite 컨테이너를 끊었습니다.
-
-| 항목 | 실측 |
-|---|---|
-| Holdout | 270회 (PARSEC 240 + CloudSuite 30). warmup 별도. 실행 실패 0 |
-| Integrity | VALID 160, INVALID 110 |
-| Context | CONTROLLED 100, CONTAMINATED 125, UNKNOWN 45 |
-| 한 줄 판정 | ACCEPT 70, DEGRADED 90, REJECT 110 |
-
-조건당 45회 (PARSEC 40 + CloudSuite 5). REJECT 5는 전부 CloudSuite입니다.
-freqmine CLEAN 10회는 VALID이지만 CPU `0`으로 나가 CONTAMINATED이고,
-PCORE(`0-15`)에서는 ACCEPT입니다.
-
-| 조건 | ACCEPT | DEGRADED | REJECT |
+| Condition | ACCEPT | DEGRADED | REJECT |
 |---|---:|---:|---:|
 | CLEAN | 30 | 10 | 5 |
 | MULTIPLEX | 0 | 0 | 45 |
@@ -235,54 +82,280 @@ PCORE(`0-15`)에서는 ACCEPT입니다.
 | PCORE | 40 | 0 | 5 |
 | HYBRID | 0 | 0 | 45 |
 
-최소 `cpu_core` `pcnt-running` 중앙값: CLEAN/SMT/MEMORY/PCORE 100%,
-MULTIPLEX 30%, PARSEC HYBRID 99%, CloudSuite HYBRID 0%.
+freqmine CLEAN x10 is VALID but CONTAMINATED (CPU `0`). On PCORE
+(`0-15`) it is ACCEPT.
 
-PARSEC median runtime (초). 변화율은 해당 workload CLEAN median 대비.
+Minimum `cpu_core` `pcnt-running` median: CLEAN/SMT/MEMORY/PCORE
+100%, MULTIPLEX 30%, PARSEC HYBRID 99%, CloudSuite HYBRID 0%.
+
+PARSEC median runtime (seconds). Deltas vs that workload's CLEAN
+median.
 
 | Workload | CLEAN | MULTIPLEX | SMT | MEMORY | PCORE | HYBRID |
 |---|---:|---:|---:|---:|---:|---:|
-| blackscholes | 12.95 s | +0.4% | **+45.8%** | +2.2% | −0.0% | +0.3% |
-| canneal | 40.57 s | +0.2% | +14.4% | **+73.8%** | −0.4% | −0.4% |
+| blackscholes | 12.95 s | +0.4% | **+45.8%** | +2.2% | -0.0% | +0.3% |
+| canneal | 40.57 s | +0.2% | +14.4% | **+73.8%** | -0.4% | -0.4% |
 | freqmine | 50.83 s | +0.4% | +35.1% | +2.9% | +0.1% | +0.2% |
 | swaptions | 15.62 s | +0.8% | +61.8% | +1.4% | +0.5% | +0.5% |
 
-CloudSuite Data Caching (고정 100,000 req/s):
+CloudSuite Data Caching (fixed 100,000 req/s):
 
-| 조건 | Median throughput | Throughput CV | Median interval-p99 | p99 vs CLEAN |
+| Condition | Median throughput | Throughput CV | Median interval-p99 | p99 vs CLEAN |
 |---|---:|---:|---:|---:|
-| CLEAN | 100021.4 | 0.00% | 0.0221 ms | — |
+| CLEAN | 100021.4 | 0.00% | 0.0221 ms | - |
 | MULTIPLEX | 100022.6 | 0.00% | 0.0251 ms | +13.6% |
 | SMT | 100022.1 | 0.83% | 0.0271 ms | +22.6% |
 | MEMORY | 100027.4 | 0.00% | 0.0301 ms | +36.2% |
 | PCORE | 100022.3 | 0.00% | 0.0231 ms | +4.5% |
 | HYBRID | 100022.5 | 0.00% | 0.0471 ms | **+113.1%** |
 
-REFERENCE IPC 대비 MULTIPLEX: blackscholes +0.02%, swaptions −0.22%
-(`pcnt-running` 30%). INVALID는 coverage가 모자라다는 뜻입니다. IPC가
-틀렸다는 증명은 아닙니다. 이 holdout의 `git_dirty`는 true입니다.
+![v2 axes](figures/figure_v2_axes.png)
+![v2 application](figures/figure_v2_outcome.png)
 
-![v2 두 축](figures/figure_v2_architecture.png)
-![v2 축](figures/figure_v2_axes.png)
-![v2 애플리케이션](figures/figure_v2_outcome.png)
-![v2 REFERENCE](figures/figure_v2_reference.png)
+Association, not a claim that the gate catches every interference.
 
----
+### 3.1 native-cloudsuite-v2.1
 
-## 8. native-cloudsuite-v2.1
+The 30 v2 CloudSuite runs stay. After pinning server threads, CLEAN
+x5 and MEMORY x5 were added. Policy unchanged. Audit PASS. Observed
+CPUs: `2,4,6,8`.
 
-v2 CloudSuite 30회는 그대로 뒀습니다. 서버 스레드를 pin한 뒤 CLEAN 5,
-MEMORY 5만 추가했습니다. 정책은 그대로입니다. 감사 PASS. 관측 CPU는
-`2,4,6,8`입니다.
-
-| 조건 | Integrity | Context | 한 줄 판정 | p99 |
+| Condition | Integrity | Context | Collapsed | p99 |
 |---|---|---|---|---|
 | CLEAN | VALID 5/5 | CONTROLLED | ACCEPT | 0.0221 ms |
 | MEMORY | VALID 5/5 | CONTAMINATED | DEGRADED | 0.0301 ms (**+36.2%**) |
 
 ---
 
-## 출처
+## 4. REFERENCE
+
+`native-reference-v2` 40 runs, same audit PASS. Numbers:
+`reference-v2.json`.
+
+MULTIPLEX vs REFERENCE IPC: blackscholes +0.02%, swaptions -0.22%
+(`pcnt-running` 30%). Close values are not enough coverage. Miss the
+frozen coverage bar and the run is INVALID.
+
+![v2 REFERENCE](figures/figure_v2_reference.png)
+
+---
+
+## 5. Limitations
+
+One shared bare-metal box. CLEAN is not dedicated. On HYBRID,
+`cpu_core` does not count E-core time. The loadtester `timeDiff`
+quirk is left as recorded. Runtime CV degrade 0.5086 did not attach
+`HIGH_RUN_VARIANCE`. Frequency and turbo were left alone.
+`pcnt-running` cutoffs are heuristics.
+
+v2 holdout has `git_dirty` true. No snapshot of that dirty tree.
+Local `artifacts/experiment-code.patch` reconstructs the recorded
+HEAD against a later committed tree.
+
+Fuller list: [limitations.md](limitations.md).
+
+---
+
+## 6. Reproduce
+
+Policy is `configs/experiment_v2.yaml`. It was not changed after
+holdout. Steps: [experiments/README.md](../experiments/README.md).
+Aggregate JSON, CSV, raw `perf.jsonl`, and audit files are not in
+git; they live under local `artifacts/`.
+
+`bouncer run` in this tree drives calibration kernels only. It is
+not a wrap-any-command CLI.
+
+---
+
+## 7. v1 retrospective
+
+v1 collapsed quality into one word `ACCEPT` / `DEGRADED` /
+`REJECT`. The hypothesis was that migrations inside the pin also
+hurt measurement quality.
+
+Experiment ID `native-holdout-v1`. Machine audit
+`completion-audit.json` -> **PASS** (225 runs, issues 0). Numbers:
+`report.json` and raw `perf.jsonl`.
+
+| Item | Measured |
+|---|---|
+| Holdout | 225 runs (PARSEC 200 + CloudSuite 25). Warmups separate. Zero launch failures |
+| Collapsed verdict | ACCEPT 15, DEGRADED 160, REJECT 50 |
+| CLEAN | all 45 DEGRADED (`CPU_MIGRATION`) |
+| MULTIPLEX | all 45 REJECT. Min `pcnt-running` median 30% |
+| Where ACCEPT appeared | blackscholes SMT x9, blackscholes MEMORY x6 only |
+
+MULTIPLEX runtime is almost unchanged; the measurement is REJECT.
+blackscholes SMT can be ACCEPT and still +45.3% median runtime vs
+CLEAN. CloudSuite interval-p99 on UNPINNED is +121.7% vs CLEAN.
+
+### 7.1 Why it failed
+
+One word mixed two things. Movement inside the pin is run context,
+not counter scheduling. SMT has PMU running 100% and still stretches
+application time. UNPINNED lumped P-core and E-core into one
+condition.
+
+### 7.2 What changed
+
+Integrity and context were split. Migrations inside the pin no
+longer drop integrity. UNPINNED became PCORE and HYBRID. CloudSuite
+group spread is interval-p99. Policy was frozen again in
+`experiment_v2.yaml`. The 225 v1 runs stay.
+
+### 7.3 Environment
+
+| Item | Value |
+|---|---|
+| Host | `gpuidblab`, systemd-detect-virt `none` (bare-metal) |
+| CPU | Intel Core i9-14900K, 32 logical CPU, SMT on, NUMA 1 |
+| Pinning | P-core `2,4,6,8` (UNPINNED 0-31) |
+| SMT interference | real calibration process on siblings `3,5,7,9` |
+| Memory interference | real STREAM-like process on `24,25,26,27` |
+| OS / perf | Linux 7.0.0-28-generic, Python 3.12.3, `perf stat -j` |
+| Permission | first probe `perf_event_paranoid=4` -> BLOCKER A. Set to 1, recheck. First probe kept under local `artifacts/preflight/` |
+| Shared host | leftover Docker work. CloudSuite memcached stayed up during PARSEC holdout. CLEAN means CounterBouncer added no extra load. Not a dedicated machine |
+
+### 7.4 Method
+
+| Suite | Workload | Input / setup | Repeats |
+|---|---|---|---|
+| PARSEC 3.0 | blackscholes, canneal, dedup, streamcluster | native, 4 threads, whole application (I/O included) | 10 per condition + 1 warmup |
+| CloudSuite | data-caching | Twitter 28x, memcached 10 GB / 4 threads, client 8 threads, 200 conn, 100,000 req/s, timeout 60 s | 5 per condition + 1 warmup |
+
+PARSEC is the binary itself. CloudSuite PMU is the server host PID.
+Condition order is shuffled inside each repetition block. Labels
+come from the manifest; good/bad was not hand-coded.
+
+| Condition | What it is |
+|---|---|
+| CLEAN | pin, no extra CounterBouncer load |
+| MULTIPLEX | more events, real time multiplexing |
+| SMT | competing process on pinned-core siblings |
+| MEMORY | memory kernel on other CPUs |
+| UNPINNED | affinity removed. hybrid `cpu_core` cannot count E-core time |
+
+Optional condition E5 (frequency/power) was not run.
+
+Calibration: 80 runs, then freeze. Holdout did not retune.
+
+| Rule | Value | Note |
+|---|---|---|
+| PMU running DEGRADED / REJECT | 90% / 50% | candidate heuristic, not a standard |
+| Any `cpu-migrations` | DEGRADED | includes movement inside the 4-CPU pin |
+| CV DEGRADED / REJECT | 0.05115 / 0.20 | `max(0.05, 3x max CLEAN calibration CV)` |
+| Group spread | `HIGH_RUN_VARIANCE` | separate from per-run hard verdict |
+
+Sanity check (CLEAN calibration median, `cpu_core`):
+
+- branch-misses: predictable 8,192.0 vs random 62,800,383.5
+- cache-misses: small working set 6,074.5 vs large 29,648,199.5
+
+Official STREAM C ran only as a pipeline check after freeze. Not in
+real-app results.
+
+### 7.5 Holdout results
+
+45 runs per condition (PARSEC 40 + CloudSuite 5).
+
+| Condition | ACCEPT | DEGRADED | REJECT |
+|---|---:|---:|---:|
+| CLEAN | 0 | 45 | 0 |
+| MULTIPLEX | 0 | 0 | 45 |
+| SMT | 9 | 36 | 0 |
+| MEMORY | 6 | 39 | 0 |
+| UNPINNED | 0 | 40 | 5 |
+
+All 5 UNPINNED REJECT are CloudSuite (`PARTIAL_HYBRID_PMU_COVERAGE`
+plus scheduling-coverage issues). All 15 ACCEPT are blackscholes.
+
+![Figure 4. Verdicts by condition](figures/figure4_verdicts.png)
+
+Reason codes (several can attach to one run):
+`LOW_PMU_RUNNING_RATIO` 300, `CPU_MIGRATION` 210,
+`PARTIAL_HYBRID_PMU_COVERAGE` 45, `HIGH_RUN_VARIANCE` 20.
+
+`HIGH_RUN_VARIANCE` attached to four CloudSuite conditions
+(CLEAN/MEMORY/SMT/UNPINNED) whose interval-p99 group CV crossed a
+fixed heuristic. Throughput CV is 0.00%. Using the runtime CV cutoff
+on latency is a limitation.
+
+Minimum `cpu_core` `pcnt-running`:
+
+| Condition | Median | Min |
+|---|---:|---:|
+| CLEAN | 100% | 100% |
+| SMT | 100% | 100% |
+| MEMORY | 100% | 100% |
+| MULTIPLEX | 30% | 30% |
+| UNPINNED | 99% | 0% |
+
+![Figure 2. Multiplexing and derived-metric repeatability](figures/figure2_multiplexing.png)
+
+MULTIPLEX is real multiplexing from more requested events. Numbers
+were not spliced into the JSON.
+
+PARSEC median runtime (seconds). Deltas vs that workload's CLEAN
+median.
+
+| Workload | CLEAN | MULTIPLEX | SMT | MEMORY | UNPINNED |
+|---|---:|---:|---:|---:|---:|
+| blackscholes | 12.94 s | +0.8% | **+45.3%** | +0.9% | +0.5% |
+| canneal | 43.10 s | +1.0% | +13.6% | **+69.5%** | -0.6% |
+| dedup | 5.63 s | 0.0% | +35.6% | +7.2% | -13.4% |
+| streamcluster | 74.59 s | -1.3% | -4.8% | +27.9% | +0.2% |
+
+Repeat CV (sample sd/mean): canneal CLEAN is highest at 4.10%. The
+rest sit below. No PARSEC runtime group crossed the gate CV
+DEGRADED cut (5.115%).
+
+CloudSuite Data Caching (fixed 100,000 req/s, 53 intervals/run,
+first 2 dropped):
+
+| Condition | Median throughput (req/s) | Throughput CV | Median interval-p99 (ms) | p99 vs CLEAN |
+|---|---:|---:|---:|---:|
+| CLEAN | 100022.0 | 0.00% | 0.02210 | - |
+| MULTIPLEX | 100022.0 | 0.00% | 0.02410 | +9.0% |
+| SMT | 100022.3 | 0.00% | 0.02810 | +27.1% |
+| MEMORY | 100028.7 | 0.00% | 0.03310 | +49.8% |
+| UNPINNED | 100022.5 | 0.00% | 0.04900 | **+121.7%** |
+
+Reported p99 is the across-repeat median of interval p99.
+
+![Figure 3. Repeat CV](figures/figure3_stability.png)
+
+![Figure 5. Verdict vs application time](figures/figure5_outcome.png)
+
+### 7.6 Azure external data
+
+Azure VM Noise Dataset 2024: 776 CSV partitions, 7,037,220
+observations, invalid 0, long/short matched 364 pairs.
+
+Median CV on matched partitions: long-lived 0.033, short-lived
+0.059.
+
+![Azure](figures/azure_dispersion.png)
+
+Not local PMU ground truth. Not used to compute CounterBouncer
+verdict accuracy. External context only: long-running cloud
+benchmarks move too.
+
+### 7.7 Failures and stops
+
+| Event | Action |
+|---|---|
+| `perf_event_paranoid=4`, 9 default events permission-fail | stop as BLOCKER A, set permission, recheck READY. First probe kept under local `artifacts/preflight/` |
+| Calibration overlapped CloudSuite sanity | drop that batch, keep `artifacts/calibration-development-overlap`, collect a separate 80, then freeze |
+| CloudSuite non-TTY buffering | `docker exec -t` so official loader stats survive |
+| Session end left `parsec-canneal-unpinned-r02` unfinished | excluded from measurement, kept in `artifacts/interrupted/`, retried |
+| 15 s CloudSuite ran right after PARSEC exit | 15 s holdout dropped after the 60 s amendment. Kept in `artifacts/interrupted/cloudsuite-15s-before-amendment`. 60 s warmup has 53 intervals |
+
+No holdout run was discarded for a launch failure.
+
+---
+
+## Sources
 
 [sources.md](sources.md). Azure: Freischuetz, Kanellis, Kroth,
 Venkataraman, *TUNA*, EuroSys 2025, CC-BY.

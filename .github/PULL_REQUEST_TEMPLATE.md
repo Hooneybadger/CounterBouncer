@@ -4,8 +4,8 @@
 
 ## Type
 
-- [ ] `feat` — user-visible behavior
-- [ ] `fix` — bug fix
+- [ ] `feat` - user-visible behavior
+- [ ] `fix` - bug fix
 - [ ] `docs`
 - [ ] `test`
 - [ ] `chore` / `ci`
@@ -18,4 +18,4 @@
 
 ## Notes for reviewers
 
-<!-- Hardware runs, expected verdict changes, or “docs only”. -->
+<!-- Hardware runs, expected verdict changes, or "docs only". -->

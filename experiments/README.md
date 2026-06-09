@@ -1,8 +1,9 @@
-# 실험 재현
+# Reproduce
 
-저장소 루트에서 Python 3.11 이상을 씁니다. `manifest.yaml`이 조건과
-반복 횟수를 고정합니다. 원시 결과는 git 밖입니다. 용량 때문입니다.
-각 run은 커밋, 매니페스트/정책, 입력·실행 파일 해시에 연결됩니다.
+From the repository root, Python 3.11+. `manifest.yaml` pins
+conditions and repeat counts. Raw results stay out of git because
+of size. Aggregates and `perf.jsonl` live under local `artifacts/`.
+Each run ties to a commit, manifest/policy, and input/binary hashes.
 
 ```console
 python3 -m venv .venv
@@ -14,8 +15,8 @@ bash scripts/setup_cloudsuite.sh
 bash scripts/build_calibration.sh
 ```
 
-체크인된 정책은 이미 동결돼 있습니다. 같은 실험을 재현하려면 그 파일을
-그대로 둡니다.
+Checked-in policy is already frozen. Leave those files alone to
+reproduce the same experiment.
 
 ```console
 .venv/bin/python scripts/run_matrix.py
@@ -25,34 +26,34 @@ bash scripts/build_calibration.sh
 .venv/bin/python scripts/audit_results.py
 ```
 
-`native-holdout-v2`는 `bash scripts/run_v2_campaign.sh`입니다. 정책은
-`configs/experiment_v2.yaml`입니다. CloudSuite 보완은
-`experiments/manifest_v2_1_cloudsuite.yaml`입니다. 동결한 정책은 그대로
-둡니다.
+`native-holdout-v2` is `bash scripts/run_v2_campaign.sh`. Policy is
+`configs/experiment_v2.yaml`. The CloudSuite follow-up is
+`experiments/manifest_v2_1_cloudsuite.yaml`. Frozen policy stays
+frozen.
 
-## 재개와 실패
+## Resume and failures
 
-run matrix는 매니페스트가 같고 이미 끝난 `run_id`만 이어서 합니다.
-중간에 끊긴 run은 보존하고 살펴보기 전에는 재개를 멈춥니다. 실패는
-남깁니다. warmup은 본측정과 별도입니다. 이번 캠페인에서
-조사한 중단분은 `artifacts/interrupted/`에 있고 holdout에는 없습니다.
-측정 중에는 빌드·다운로드·분석이나 다른 CounterBouncer 벤치마크를
-같이 안 돌립니다.
+The run matrix continues only `run_id`s that already finished under
+the same manifest. A run cut mid-flight is kept; resume stops until
+it has been inspected. Failures are kept. Warmup is separate from
+the measured set. Interrupted attempts from this campaign sit in
+`artifacts/interrupted/` and are not in holdout. During measurement,
+do not also build, download, analyze, or run another CounterBouncer
+benchmark.
 
-새 머신이면 실험을 따로 만들고 calibration을 새로 모은 뒤, 그
-holdout 전에 정책을 새로 freeze합니다. 지금 있는 정책은 그대로
-둡니다. 여기 적힌 topology·PMU 이름은 이 호스트 전용이라 다시
-검사해야 합니다.
+A new machine is a new experiment: collect calibration, freeze
+policy, then holdout. Do not reuse the files here as-is. Topology
+and PMU names in these docs are this host's and must be rechecked.
 
-## CloudSuite 컨테이너
+## CloudSuite containers
 
-소스 fetcher는 `configs/sources.yaml`에 커밋과 이미지 digest를
-고정합니다. CloudSuite 설치는 그 이미지가 있다고 보고
-`counterbouncer-dc-server`, `counterbouncer-dc-client`,
-`counterbouncer-net`만 만듭니다. 처음 설치가 데이터셋을 스케일·워밍합니다.
-측정 중에는 스케일을 다시 안 합니다. 이미지 digest는
-`artifacts/setup`에 있습니다. 호스트 포트는 안 엽니다.
+The source fetcher pins commits and image digests in
+`configs/sources.yaml`. CloudSuite setup assumes those images exist
+and only creates `counterbouncer-dc-server`,
+`counterbouncer-dc-client`, and `counterbouncer-net`. First install
+scales and warms the dataset. Measurement does not scale again.
+Image digests are in `artifacts/setup`. No host ports are published.
 
-재현이 끝나면 더 이상 필요 없을 때 그 컨테이너 두 개와
-`counterbouncer-net`만 정지·삭제합니다. 예전 이름 `metrictrust-dc-*`가
-남아 있으면 같이 지웁니다.
+When reproduction is done, stop and delete those two containers and
+`counterbouncer-net` if you no longer need them. Also drop leftover
+`metrictrust-dc-*` names.

@@ -8,7 +8,7 @@ and [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 - Do not invent benchmark numbers, inject noise into results, or retune
   a frozen policy (`configs/experiment.yaml`, `configs/experiment_v2.yaml`)
   after looking at that campaign's holdout.
-- Do not add a profiler UI, dashboard, or LLM “auto diagnosis”.
+- Do not add a profiler UI, dashboard, or LLM "auto diagnosis".
 - Real application evidence lives under `artifacts/` and is not in git.
   Reproduce with `experiments/README.md` on a machine you control.
 
@@ -47,7 +47,7 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`.
 
 - One concern per commit. A reviewer should be able to revert a commit safely.
 - Explain *why* in the body when the diff is not obvious.
-- Do not bundle unrelated files so the commit “looks complete”.
+- Do not bundle unrelated files so the commit "looks complete".
 
 ## Pull requests
 

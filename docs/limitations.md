@@ -1,23 +1,25 @@
-# 한계
+# Limitations
 
-공유 bare-metal i9-14900K 한 대입니다. CLEAN은 전용 머신이 아닙니다.
-`native-holdout-v1` PARSEC 동안 프로젝트 memcached가 떠 있었고,
-`native-holdout-v2` PARSEC는 그 컨테이너만 끊었습니다.
+One shared bare-metal i9-14900K. CLEAN is not a dedicated box.
+Project memcached was up during `native-holdout-v1` PARSEC.
+`native-holdout-v2` PARSEC stopped that container only.
 
-HYBRID에서 `cpu_core`는 E-core 시간을 못 셉니다. pin 안
-`cpu-migrations`만으로는 integrity가 떨어지지 않습니다. freqmine
-CLEAN 10회는 CPU `0`으로 나갔습니다.
+On HYBRID, `cpu_core` does not count E-core time. Migrations inside
+the pin do not, by themselves, drop integrity. freqmine CLEAN x10
+ran on CPU `0`.
 
-`native-holdout-v2` CloudSuite 30회는 서버 스레드가 pin 밖으로 나가
-INVALID입니다. `native-cloudsuite-v2.1`은 그 30회를 그대로 두고, pin을
-고친 뒤 CLEAN 5 / MEMORY 5만 추가했습니다.
+All 30 CloudSuite runs in `native-holdout-v2` are INVALID: server
+threads left the pin. `native-cloudsuite-v2.1` leaves those 30 in
+place and adds CLEAN x5 / MEMORY x5 after pinning threads.
 
-p99는 interval p99의 중앙값입니다. loadtester `timeDiff` 오기는
-그대로 뒀습니다. runtime CV degrade 0.5086은 CLEAN `cache-large`
-CV 0.1695에서 나왔고, 이 임계로는 `HIGH_RUN_VARIANCE`가 안
-붙었습니다. v2 holdout의 `git_dirty`는 true입니다.
+p99 is the median of interval p99. The loadtester `timeDiff` quirk
+is left as recorded. Runtime CV degrade 0.5086 comes from CLEAN
+`cache-large` CV 0.1695; that bar did not attach
+`HIGH_RUN_VARIANCE`. v2 holdout has `git_dirty` true. There is no
+snapshot of that dirty tree. Local `artifacts/experiment-code.patch`
+reconstructs the recorded HEAD against a later committed tree.
 
-주파수와 터보는 그대로 뒀습니다. generic cache를 만능 LLC나 대역폭으로
-쓰지 않습니다. REFERENCE와 Azure는 PMU 참값이 아닙니다.
-`pcnt-running` 고정 임계는 heuristic입니다. 시간 위상과 메트릭 종류는
-아직 안 넣었습니다.
+Frequency and turbo were left alone. Generic cache is not a stand-in
+for LLC or bandwidth. REFERENCE and Azure are not PMU ground truth.
+`pcnt-running` cutoffs are heuristics. Time phase and metric class
+are not in the gate yet.

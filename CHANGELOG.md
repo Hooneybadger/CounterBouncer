@@ -4,7 +4,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/) for the Python package API,
 not for measurement campaigns (those are named, e.g. `native-holdout-v1`).
 
-## [0.2.1] — 2026-06-09
+## [0.2.1] - 2026-06-09
 
 ### Fixed
 
@@ -14,14 +14,17 @@ not for measurement campaigns (those are named, e.g. `native-holdout-v1`).
 ### Changed
 
 - MULTIPLEX `INVALID` is a coverage-policy miss, not a claim that scaled IPC is wrong.
-  REFERENCE deviations stay blackscholes +0.02% and swaptions −0.22%.
+  REFERENCE deviations stay blackscholes +0.02% and swaptions -0.22%.
+- Results report leads with v2/v2.1. v1 is a retrospective, not deleted.
 
 ### Added
 
 - Complementary CloudSuite check `native-cloudsuite-v2.1` (CLEAN and MEMORY only).
   `configs/experiment_v2.yaml` is not retuned.
+- Campaign aggregates, audits, and raw `perf.jsonl` kept in local
+  `artifacts/` (not in git).
 
-## [0.2.0] — 2026-06-09
+## [0.2.0] - 2026-06-09
 
 ### Changed
 
@@ -38,7 +41,7 @@ not for measurement campaigns (those are named, e.g. `native-holdout-v1`).
 - PCORE vs HYBRID conditions (v1 UNPINNED split), minimal-group REFERENCE measurements,
   placement sampling, and `scripts/prepare_baseline.py`.
 
-## [0.1.0] — 2026-06-08
+## [0.1.0] - 2026-06-08
 
 Published name: **CounterBouncer**. Python package `counterbouncer`, CLI `bouncer`.
 

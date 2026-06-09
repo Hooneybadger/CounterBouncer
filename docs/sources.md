@@ -1,22 +1,23 @@
-# 출처
+# Sources
 
-로컬 소스 커밋과 이미지 digest는 `artifacts/setup/provenance.json`에
-있습니다. 이 파일은 git에 없습니다.
+Local source commits and image digests are in
+`artifacts/setup/provenance.json`. That file is not in git; it lives
+under local `artifacts/`.
 
 - Linux perf stat JSON: https://man7.org/linux/man-pages/man1/perf-stat.1.html
-- Linux 이벤트 그룹/multiplexing: https://github.com/torvalds/linux/blob/master/tools/perf/Documentation/perf-list.txt
-- perf 접근 제어: https://www.kernel.org/doc/html/latest/admin-guide/perf-security.html
+- Linux event groups / multiplexing: https://github.com/torvalds/linux/blob/master/tools/perf/Documentation/perf-list.txt
+- perf access control: https://www.kernel.org/doc/html/latest/admin-guide/perf-security.html
 - PARSEC: https://github.com/csail-csg/parsec
-- Ubuntu 설치와 원본 입력 미러: https://github.com/cirosantilli/parsec-benchmark
+- Ubuntu install and original input mirror: https://github.com/cirosantilli/parsec-benchmark
 - CloudSuite: https://github.com/parsa-epfl/cloudsuite
 - Data Caching: https://github.com/parsa-epfl/cloudsuite/blob/main/docs/benchmarks/data-caching.md
-- 공식 loader v4.0: https://github.com/parsa-epfl/memcached-loadtester/tree/v4.0
+- Official loader v4.0: https://github.com/parsa-epfl/memcached-loadtester/tree/v4.0
 - STREAM: https://github.com/jeffhammond/STREAM
 - Azure VM Noise Dataset 2024: https://github.com/Azure/AzurePublicDataset/blob/master/AzureVMNoiseDataset2024.md
 
-Azure 인용: Johannes Freischuetz, Konstantinos Kanellis, Brian Kroth,
-and Shivaram Venkataraman. 2025. TUNA: Tuning Unstable and Noisy Cloud
-Applications. EuroSys '25. 데이터셋은 CC-BY입니다. upstream LICENSE는
-`vendor/azure`에 그대로 둡니다. 벤치마크 소스·입력 라이선스는 각
-upstream에 있습니다. vendor 코드, 데이터셋, 이미지는 이 저장소
-원저작으로 다시 안 올립니다.
+Azure citation: Johannes Freischuetz, Konstantinos Kanellis, Brian
+Kroth, and Shivaram Venkataraman. 2025. TUNA: Tuning Unstable and
+Noisy Cloud Applications. EuroSys '25. Dataset is CC-BY. Upstream
+LICENSE stays under `vendor/azure`. Benchmark source and input
+licenses are each upstream's. Vendor code, datasets, and images are
+not re-published as original work of this repository.

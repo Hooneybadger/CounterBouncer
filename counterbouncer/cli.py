@@ -6,7 +6,10 @@ from .workloads.calibration import make
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Bouncer for Linux PMU measurements')
+    parser = argparse.ArgumentParser(
+        description='Quality gate for Linux PMU measurements (integrity x context). '
+                    '`run` executes local calibration kernels only.')
+    parser.add_argument('--version', action='version', version='%(prog)s 0.2.1')
     sub = parser.add_subparsers(dest='action', required=True)
     run = sub.add_parser('run')
     run.add_argument('suite', choices=['calibration'])

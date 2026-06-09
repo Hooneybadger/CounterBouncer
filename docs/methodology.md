@@ -1,60 +1,62 @@
-# 측정 방법
+# Method
 
-Linux bare-metal에서 `perf stat` JSON을 모읍니다. PARSEC는 공식 native
-바이너리를 perf가 직접 감쌉니다. 입력 풀기와 빌드는 측정 밖입니다.
-카운터 구간과 런타임 모두 애플리케이션 초기화와 파일 I/O를 포함합니다.
-측정 구간을 PARSEC hook으로 자르지 않습니다.
+On Linux bare metal, `perf stat` JSON is the record. PARSEC wraps
+the official native binary. Unpack and build sit outside the
+measured window. Counter interval and runtime both include
+application init and file I/O. The window is not clipped to PARSEC
+ROI hooks.
 
-CloudSuite는 memcached 서버의 호스트 PID에 붙입니다. Docker CLI나
-클라이언트 카운터는 안 씁니다. 클라이언트는 다른 CPU set에서
-돕니다. 서버 카운터 창에는 클라이언트 명령(시작 구간 포함)이 들어갑니다.
-로더가 낸 interval 중 앞 두 개를 빼고 통계를 냅니다. 클라이언트 명령은
-`timeout`으로 `duration_s=60`에 묶입니다.
+CloudSuite attaches to the memcached server's host PID. Docker CLI
+and client counters are unused. The client runs on a different CPU
+set. The server counter window includes the client command, start-up
+included. Loader intervals drop the first two before stats. The
+client command is bounded with `timeout` at `duration_s=60`.
 
-## 핀과 이벤트
+## Pin and events
 
-P-core affinity는 `2,4,6,8`입니다. SMT 경쟁은 `3,5,7,9`, 메모리 경쟁은
-`24,25,26,27`입니다. PCORE는 `/sys/devices/cpu_core/cpus`(이 호스트는
-`0-15`) 안에서만 이동합니다. HYBRID는 present CPU 전체이며 `cpu_core`
-부분 coverage를 의도적으로 봅니다. IPC는 PMU끼리 합치지 않습니다.
+P-core affinity is `2,4,6,8`. SMT contention is `3,5,7,9`. Memory
+contention is `24,25,26,27`. PCORE stays inside
+`/sys/devices/cpu_core/cpus` (`0-15` on this host). HYBRID is every
+present CPU; `cpu_core` then has only partial coverage, on purpose.
+IPC is not summed across PMU units.
 
-pin 안 `cpu-migrations`만으로는 integrity가 떨어지지 않습니다.
-프로세스 트리의 관측 CPU를 읽어 affinity 이탈, P/E 이동,
-NUMA 이동을 봅니다.
+Migrations inside the pin do not, by themselves, drop integrity.
+Observed CPUs of the process tree catch affinity escape, P/E
+movement, and NUMA movement.
 
-카운터 그룹은 cycles/instructions, branches/branch-misses,
-cache-references/cache-misses입니다. 파생값은 각 쌍에서 event-runtime과
-pcnt-running이 맞을 때만 씁니다. missing / unsupported / not-counted는
-null로 남깁니다. 독립 alias 이벤트 쌍을 같이 요청하면 실제
-multiplexing이 생깁니다. generic cache 비율은 CPU마다 의미가 다릅니다.
+Counter groups: cycles/instructions, branches/branch-misses,
+cache-references/cache-misses. Derived metrics are used only when
+event-runtime and pcnt-running match on that pair. missing /
+unsupported / not-counted stay null. Requesting independent alias
+pairs together produces real multiplexing. Generic cache ratios do
+not mean the same thing on every CPU.
 
-REFERENCE는 `{cpu_core/cycles, cpu_core/instructions}`와 software
-이벤트만 요청합니다. 절대 참값이 아니라 high-coverage minimal-event
-group입니다.
+REFERENCE requests `{cpu_core/cycles, cpu_core/instructions}` plus
+software events. High-coverage minimal group, not an absolute
+truth.
 
-## 반복과 라벨
+## Repeats and labels
 
-조건마다 같은 실행 파일과 설정을 씁니다. 워크로드마다 warmup 한 번
-뒤에, PARSEC 10회 또는 CloudSuite 5회 repetition block 안에서 조건
-순서를 무작위화합니다. 시도는 모두 남깁니다. 조건 라벨은 manifest가
-만듭니다. 그림의 가로 jitter만 난수입니다.
+Each condition uses the same binary and settings. After one warmup
+per workload, condition order is shuffled inside a PARSEC x10 or
+CloudSuite x5 block. Every attempt is kept. Condition labels come
+from the manifest. The only plot RNG is horizontal jitter.
 
-CLEAN은 CounterBouncer가 추가 간섭을 안 넣었다는 뜻입니다. 전용
-머신은 아닙니다. `native-holdout-v2` PARSEC는 프로젝트 CloudSuite
-컨테이너를 끈 뒤에 돌립니다. 다른 랩 컨테이너는 그대로 둡니다.
+CLEAN means CounterBouncer added no extra interference. It is not a
+dedicated machine. `native-holdout-v2` PARSEC stops the project's
+CloudSuite containers first. Other lab containers stay up.
 
-## 정책 freeze
+## Policy freeze
 
-정책 후보는 heuristic입니다. 업계 표준은 아닙니다. holdout 전에
-calibration 각 케이스 10회를 모읍니다. freeze에서 runtime CV degrade는
-`max(0.05, 3× CLEAN calibration CV 최댓값)`, reject는
-`max(0.20, 2× degrade)`입니다. running 임계는 후보 50/90%를 유지합니다.
-CloudSuite 그룹 안정성은 interval-p99 CV입니다. latency cutoff는
-freeze 전에 정책 파일에 적어 둔 후보 heuristic입니다.
+Policy candidates are heuristics, not an industry standard.
+Calibration collects 10 runs per case before freeze. Runtime CV
+degrade is `max(0.05, 3x max CLEAN calibration CV)`; reject is
+`max(0.20, 2x degrade)`. Running thresholds stay at the 50/90%
+candidates. CloudSuite group stability is interval-p99 CV. Latency
+cutoffs were written into the policy file before freeze.
 
-`native-holdout-v1` 정책은 `configs/experiment.yaml`에 그대로 둡니다.
-새 캠페인은 `configs/experiment_v2.yaml`만 씁니다. holdout을 보고 정책은
-그대로 둡니다.
+`native-holdout-v1` policy stays in `configs/experiment.yaml`. New
+campaigns use only `configs/experiment_v2.yaml`. Holdout numbers do
+not retune policy.
 
-하드 판정은 run 단위입니다. `HIGH_RUN_VARIANCE`는 그룹 주석입니다.
-
+Hard verdicts are per run. `HIGH_RUN_VARIANCE` is a group note.
