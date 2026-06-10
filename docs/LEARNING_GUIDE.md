@@ -1,8 +1,3 @@
-# 학습가이드
-
-생성 일시: 2026년 5월 26일 오후 4:18
-선택: Guide
-
 ## 사전 준비
 
 본격적으로 시작하기 전에 환경을 정리해 둡니다. `miniforge`로 conda를 설치하고, 대회 사이트에서 받은 `ogc2026_env.yml`로 환경을 만들어 활성화합니다.
@@ -186,7 +181,7 @@ AABB는 다각형 자체가 아니라 그것을 감싸는 가장 작은 직사�
 
 이 프로파일이 학습 우선순위를 결정합니다. 기하 검사가 지배적이므로 기하 엔진의 가속이 단연 1순위입니다. 그리고 그 가속 배율이 Part E에서 ALNS가 같은 시간에 도는 반복 횟수를 — 곧 최종 점수의 상한을 — 결정합니다.
 
-여기까지 베이스라인의 모든 약점을 발견했습니다. 차례로 정리하면 다음과 같습니다. 디스패칭 규칙이 EDD에 고정되어 있어 인스턴스 적응성이 없고, 후보점이 AABB 기반이라 비정형 블록의 빈 공간을 활용하지 못하고, repair가 cycle에 빠지면 _force_place로 큰 손해를 보고 그나마 시간 안에 수렴하지도 못하며, 그 모든 결정이 expensive한 Shapely 교집합 계산에 의존합니다. 다음 파트는 이 약점들의 기하학적 뿌리를 뽑는 것에서 시작합니다.
+여기까지 베이스라인의 모든 약점을 발견했습니다. 차례로 정리하면 다음과 같습니다. 디스패칭 규칙이 EDD에 고정되어 있어 인스턴스 적응성이 없고, 후보점이 AABB 기반이라 비정형 블록의 빈 공간을 활용하지 못하고, repair가 cycle에 빠지면 \_force_place로 큰 손해를 보고 그나마 시간 안에 수렴하지도 못하며, 그 모든 결정이 expensive한 Shapely 교집합 계산에 의존합니다. 다음 파트는 이 약점들의 기하학적 뿌리를 뽑는 것에서 시작합니다.
 
 ---
 
@@ -290,7 +285,7 @@ nesting을 켜고 끈 ablation으로 베이 활용률과 obj1의 개선을 측�
 
 ## D4. 스케줄링의 깊이
 
-본 문제를 표준 스케줄링 표기($\alpha | \beta | \gamma$)로 표현해 보면 $P_m | r_j, d_j | \sum T_j$의 변형입니다. m개의 병렬 기계, release date와 due date가 있고, 목적은 총 지연 합 — 단, 본 문제는 기계가 동시에 여러 작업을 수용할 수 있고 그 수용 가능성이 공간 제약에 따라 동적입니다. 표준 표기로는 완벽히 표현되지 않습니다. 이게 본 문제의 까다로움이고, 표준 알고리즘을 그대로 가져올 수 없는 이유입니다. 배경 이론이 필요할 때는 Pinedo의 *Scheduling: Theory, Algorithms, and Systems* 챕터 3(단일 기계)과 5(병렬 기계)가 본 문제와 가장 관련이 깊습니다.
+본 문제를 표준 스케줄링 표기($\alpha | \beta | \gamma$)로 표현해 보면 $P_m | r_j, d_j | \sum T_j$의 변형입니다. m개의 병렬 기계, release date와 due date가 있고, 목적은 총 지연 합 — 단, 본 문제는 기계가 동시에 여러 작업을 수용할 수 있고 그 수용 가능성이 공간 제약에 따라 동적입니다. 표준 표기로는 완벽히 표현되지 않습니다. 이게 본 문제의 까다로움이고, 표준 알고리즘을 그대로 가져올 수 없는 이유입니다. 배경 이론이 필요할 때는 Pinedo의 _Scheduling: Theory, Algorithms, and Systems_ 챕터 3(단일 기계)과 5(병렬 기계)가 본 문제와 가장 관련이 깊습니다.
 
 본 문제 특화로 한 가지 더 짚을 부분이 있습니다. 같은 날의 EXIT 순서입니다. 모든 EXIT가 모든 ENTRY 앞에 와야 한다는 규칙이 있고, 같은 시점에 여러 EXIT가 있을 때 그 순서가 다음 ENTRY들의 가능 여부를 결정할 수 있습니다. 겹겹이 갇힌 구조는 바깥(위)부터 빼야 풀립니다. 막힘 관계를 그래프로 보면 위상 정렬(topological sort)로 feasible한 순서를 구할 수 있는 작은 부분문제입니다. B2에서 봤듯 베이스라인은 이를 block_id 정렬로 때우다 stage 5에서 실패하곤 합니다 — 우리에게는 작지만 확실한 차별화 지점입니다.
 
@@ -300,7 +295,7 @@ D1부터 D4까지 우리는 패킹과 스케줄링을 각각 다뤘지만, 본 �
 
 다행히 A3의 네 번째 측정 — obj2와 obj3은 할당만의 함수, obj1만 패킹·스케줄 의존 — 이 자연스러운 분해를 줍니다. 추천하는 구조는 2층입니다. 내층에서는 할당이 주어졌을 때 시간순 시뮬레이션 + regret 삽입 + (Part E의) ALNS로 obj1을 최소화합니다. 외층에서는 베이별 수용력 추정치(래스터 엔진이 주는 시공간 용량)를 제약으로 obj2 + obj3 최소 할당을 주기적으로 재최적화합니다 — 변수가 블록 수 × 베이 수 ≤ 1,500개라 MIP로 정확히 풀 수 있는 크기입니다(Part F).
 
-이 구조의 장점은 각 모듈을 독립적으로 단위 테스트할 수 있고, 각 모듈을 점진적으로 강화할 수 있고, 시간 예산을 모듈 단위로 분배할 수 있다는 것입니다. 더 정교한 결합 분해 — Master 문제가 할당을 정하고 Subproblem이 패킹 가능성을 검사해 "이 조합은 불가능"이라는 cut을 돌려주는 Logic-Based Benders Decomposition(Hooker, *Logic-Based Methods for Optimization*) — 는 시간이 남을 때의 확장이자 보고서의 이론적 살입니다.
+이 구조의 장점은 각 모듈을 독립적으로 단위 테스트할 수 있고, 각 모듈을 점진적으로 강화할 수 있고, 시간 예산을 모듈 단위로 분배할 수 있다는 것입니다. 더 정교한 결합 분해 — Master 문제가 할당을 정하고 Subproblem이 패킹 가능성을 검사해 "이 조합은 불가능"이라는 cut을 돌려주는 Logic-Based Benders Decomposition(Hooker, _Logic-Based Methods for Optimization_) — 는 시간이 남을 때의 확장이자 보고서의 이론적 살입니다.
 
 ---
 
@@ -320,7 +315,7 @@ Large Neighborhood Search(LNS)는 단순 이웃 대신 큰 이웃을 사용합�
 
 Adaptive LNS(ALNS)는 그 진화형입니다. 여러 destroy 연산자와 여러 repair 연산자를 가지고 있고, 각 연산자의 과거 성공률에 따라 선택 확률을 적응적으로 조정합니다. 어떤 destroy/repair 조합이 현재 인스턴스에서 잘 작동하는지를 알고리즘이 스스로 학습합니다.
 
-Ropke와 Pisinger의 2006년 논문 *An Adaptive Large Neighborhood Search Heuristic for the Pickup and Delivery Problem with Time Windows* (Transportation Science, vol 40)가 ALNS의 원전입니다. VRP에서 출발했지만 destroy/repair 아이디어는 어떤 결합 최적화 문제에도 일반화됩니다. 오픈소스로는 N-Wouda의 `alns` Python 라이브러리(https://github.com/N-Wouda/ALNS)가 있습니다. 직접 쓰기보다 코드 구조를 학습하는 용도로 좋습니다.
+Ropke와 Pisinger의 2006년 논문 _An Adaptive Large Neighborhood Search Heuristic for the Pickup and Delivery Problem with Time Windows_ (Transportation Science, vol 40)가 ALNS의 원전입니다. VRP에서 출발했지만 destroy/repair 아이디어는 어떤 결합 최적화 문제에도 일반화됩니다. 오픈소스로는 N-Wouda의 `alns` Python 라이브러리(https://github.com/N-Wouda/ALNS)가 있습니다. 직접 쓰기보다 코드 구조를 학습하는 용도로 좋습니다.
 
 ALNS의 골격은 다음과 같습니다. 초기 해를 만들고, 매 반복마다 destroy 연산자와 repair 연산자를 가중치 기반으로 선택해서 새 해를 만들고, 수락 규칙(보통 Simulated Annealing 스타일)으로 받아들일지 결정합니다. 새 best 해가 발견되면 큰 보상, 새 current 해가 발견되면 중간 보상, 거부되면 작은 보상이 연산자 가중치 업데이트의 표준 규칙입니다.
 
