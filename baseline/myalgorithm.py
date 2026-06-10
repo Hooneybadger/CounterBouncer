@@ -12,6 +12,9 @@ def algorithm(prob_info, timelimit=60):
     """
 
     # You can import other modules or define extra functions here.
-    import ogc2026.baseline.baseline_greedy as baseline_greedy
+    try:
+        import baseline_greedy  # flat layout: evaluation server / batch_runner
+    except ImportError:
+        import ogc2026.baseline.baseline_greedy as baseline_greedy  # IDE package layout
 
     return baseline_greedy.greedyalgorithm(prob_info, timelimit)

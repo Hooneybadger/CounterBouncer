@@ -69,7 +69,10 @@ Feasibility checking and objective computation: utils.check_feasibility(prob_inf
 
 import math
 import time
-from ogc2026.baseline.utils import Bay, Block, check_entry, check_exit, check_collisions, _resolve_layers, _bounding_box
+try:
+    from utils import Bay, Block, check_entry, check_exit, check_collisions, _resolve_layers, _bounding_box
+except ImportError:  # IDE package layout
+    from ogc2026.baseline.utils import Bay, Block, check_entry, check_exit, check_collisions, _resolve_layers, _bounding_box
 
 
 # -----------------------------------------------------------------------------
@@ -382,7 +385,10 @@ def greedyalgorithm(prob_info: dict, timelimit: float,
     elapsed_total = time.time() - t_start
     final_sol = {"operations": _build_operations(list(assignments.values()))}
 
-    from ogc2026.baseline.utils import check_feasibility
+    try:
+        from utils import check_feasibility
+    except ImportError:
+        from ogc2026.baseline.utils import check_feasibility
     final_result = check_feasibility(prob_info, final_sol)
     print(f"[Greedy] {'-' * 56}")
     print(f"[Greedy] Done  |  assigned={len(assignments)}/{n_blocks}  "
@@ -718,7 +724,10 @@ def _repair(prob_info: dict,
     -------
     Updated assignments dict (all blocks assigned)
     """
-    from ogc2026.baseline.utils import check_feasibility
+    try:
+        from utils import check_feasibility
+    except ImportError:
+        from ogc2026.baseline.utils import check_feasibility
 
     repaired_counts: dict[int, int] = {}
     forced_ids:      set[int]       = set()
@@ -931,7 +940,10 @@ if __name__ == "__main__":
     import json
     import pathlib
     from collections import defaultdict
-    from ogc2026.baseline.utils import check_feasibility
+    try:
+        from utils import check_feasibility
+    except ImportError:
+        from ogc2026.baseline.utils import check_feasibility
 
     parser = argparse.ArgumentParser(description="EDD greedy algorithm smoke test")
     parser.add_argument("instance", help="path to instance JSON file")
