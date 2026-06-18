@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import bisect
 import math
 import multiprocessing
 import os
@@ -57,11 +58,16 @@ def _origin_fit(blk_data: dict, oi: int, bay: Bay):
     bbox가 베이에 들어가도(bw<=width) ceil 반올림이 오른쪽/위 경계를 넘길 수 있어
     (꽉 찬 블록), 정수 위치에서의 월드 bbox를 직접 검사해야 경계 위반을 막는다.
     bbox가 베이 안이면 모든 정점도 안이므로 이 검사로 boundary가 보장된다.
+
+    ★ 경계 검사를 검증기 `Bay.contains_block`(`bb[2] <= width`, 무허용)과 *정확히* 맞춘다.
+    px+bb[2]는 검증기의 bounding_rect[2]와 같은 값이라(둘 다 모든 층·같은 ref 평행이동),
+    `+1e-6` 과대 허용을 두면 경계에 sub-eps 걸치는 블록을 floor가 통과시키고 검증기는
+    거절해 floor가 −1을 낸다. 허용을 제거해 floor의 판정 = 검증기 판정으로 만든다.
     """
     bb = _block_bbox(blk_data, oi)  # (min_x, min_y, max_x, max_y) 로컬 좌표
     px = max(0, math.ceil(-bb[0]))
     py = max(0, math.ceil(-bb[1]))
-    if px + bb[2] <= bay.width + 1e-6 and py + bb[3] <= bay.height + 1e-6:
+    if px + bb[2] <= bay.width and py + bb[3] <= bay.height:
         return px, py
     return None
 
@@ -86,54 +92,95 @@ def _edd_order(blocks_data: list) -> list:
 # 증명 가능한 feasible 안전망
 # -----------------------------------------------------------------------------
 
-def _guaranteed_place(blk_data: dict, bays: list, bay_schedule: list):
+def _empty_bay_entry_fast(sorted_slots, r_time: int, proc: int) -> int:
+    """`_empty_bay_entry`와 *동일한 값*을 O(m)에 돌려준다 -- 단, slots가 시작시각 오름차순
+    정렬돼 있어야 한다. baseline의 while-changed 재시작(O(m·passes))을 정렬 단일 패스로 바꾼다.
+
+    왜: floor가 블록마다·베이마다 이 함수를 부르는데, 원본이 O(m²)라 floor 전체가 블록수에
+    초선형(O(n³)에 근접)으로 폭발한다. 측정: 300블록 0.5s·600블록 4.4s·900블록 15s(>0.93*10s
+    → 메인의 마지막 무경계 작업이 스케일에서 −1을 낸다). 정렬을 호출부가 bisect.insort로 유지하면
+    여기선 한 패스로 같은 결과를 낸다. 정렬 단일 패스가 원본과 일치하는 이유: slots가 시작순이라
+    entry를 앞으로만 밀며 한 번 훑으면, 최종 윈도우와 겹칠 수 있는 모든 slot을 이미 본다.
+    """
+    entry = int(r_time)
+    for a, e in sorted_slots:
+        if a >= entry + proc:
+            break                 # 정렬됐으니 이후 slot도 윈도우 오른쪽 -- 더 볼 것 없다
+        if entry < e:             # [entry, entry+proc)가 [a,e)와 겹침 -> 슬롯 끝으로 민다
+            entry = e
+    return entry
+
+
+def _guaranteed_place(blk_data: dict, bays: list, sorted_sched: list):
     """한 블록의 증명 가능한 feasible 배치를 고른다.
 
-    적합한 모든 (베이, 방향)에 대해 '빈-베이 윈도우'(`_empty_bay_entry`)를 계산하고,
-    가장 빨리 비는 곳을 고른다. 빈 윈도우는 그 구간에 같은 베이의 다른 블록이 없음을
-    보장하므로 크레인 진입/반출(stage 2/3)과 공간 충돌(stage 4)이 자명히 통과한다.
-    베이별 윈도우가 서로 겹치지 않아 stage 5(시간순 재생)도 안전하다.
+    적합한 모든 베이에 대해 '빈-베이 윈도우'(`_empty_bay_entry_fast`)를 계산하고, 가장 빨리
+    비는 곳을 고른다. 빈 윈도우는 그 구간에 같은 베이의 다른 블록이 없음을 보장하므로 크레인
+    진입/반출(stage 2/3)과 공간 충돌(stage 4)이 자명히 통과한다. 베이별 윈도우가 서로 겹치지
+    않아 stage 5(시간순 재생)도 안전하다.
 
+    빈-베이 entry는 *방향과 무관*하므로 베이당 한 번만 계산한다(원본은 방향마다 중복 계산해
+    n_orient배 낭비했다). 적합한 첫 방향을 쓰되, entry·sort_key가 방향 무관이라 결과는
+    원본과 동일하다(원본도 strict `<`라 첫 적합 방향이 그 베이의 대표였다).
+
+    sorted_sched[bay] -- 시작시각 오름차순 정렬된 (entry,exit) 리스트(호출부가 유지).
     반환: (bay_id, orient_idx, x, y, entry, exit_t)
     """
     r_time = int(blk_data["release_time"])
     proc   = int(blk_data["processing_time"])
     n_bays = len(bays)
     prefs  = blk_data.get("bay_preferences", [0.0] * n_bays)
+    n_orient = len(blk_data["shape"])
 
     best = None  # (sort_key, bay_id, oi, px, py, entry)
     for bay_id, bay in enumerate(bays):
-        for oi in range(len(blk_data["shape"])):
+        fit_oi = fit_pos = None
+        for oi in range(n_orient):
             fit = _origin_fit(blk_data, oi, bay)
-            if fit is None:
-                continue
-            px, py = fit
-            entry = _empty_bay_entry(bay_schedule[bay_id], r_time, proc)
-            pref = prefs[bay_id] if bay_id < len(prefs) else 0.0
-            sort_key = (entry, -pref)  # 가장 빨리 비는 베이, 동률이면 더 선호하는 베이
-            if best is None or sort_key < best[0]:
-                best = (sort_key, bay_id, oi, px, py, entry)
+            if fit is not None:
+                fit_oi, fit_pos = oi, fit
+                break                       # entry는 방향 무관 -- 첫 적합 방향이면 충분
+        if fit_oi is None:
+            continue
+        entry = _empty_bay_entry_fast(sorted_sched[bay_id], r_time, proc)
+        pref = prefs[bay_id] if bay_id < len(prefs) else 0.0
+        sort_key = (entry, -pref)           # 가장 빨리 비는 베이, 동률이면 더 선호하는 베이
+        if best is None or sort_key < best[0]:
+            best = (sort_key, bay_id, fit_oi, fit_pos[0], fit_pos[1], entry)
 
     if best is None:
-        # 어떤 (베이,방향)도 정수 격자에서 안 맞는 극단적 경우(드묾): 가장 넓은
-        # 베이에 orient 0 최소 위치 -- 경계 위반 가능하나 크래시는 피한다.
-        bay_id = max(range(n_bays),
-                     key=lambda j: bays[j].width * bays[j].height)
-        bb = _block_bbox(blk_data, 0)
-        entry = _empty_bay_entry(bay_schedule[bay_id], r_time, proc)
-        px = max(0, math.ceil(-bb[0]))
-        py = max(0, math.ceil(-bb[1]))
-        return bay_id, 0, px, py, entry, entry + proc
+        # 어떤 (베이,방향)도 정수 격자에서 안 맞음 = 이 블록은 사실상 배치 불가(인스턴스가
+        # 본질적으로 infeasible). 그래도 −1을 피하려는 최선으로 *경계 초과가 가장 작은*
+        # (베이,방향)을 고른다 -- orient 0 고정보다 엄밀히 낫고, 초과가 0이면 실제 feasible.
+        best_ov = None  # (overflow, bay_id, oi, px, py)
+        for bay_id, bay in enumerate(bays):
+            for oi in range(n_orient):
+                bb = _block_bbox(blk_data, oi)
+                px = max(0, math.ceil(-bb[0]))
+                py = max(0, math.ceil(-bb[1]))
+                ov = (max(0.0, px + bb[2] - bay.width)
+                      + max(0.0, py + bb[3] - bay.height))
+                if best_ov is None or ov < best_ov[0]:
+                    best_ov = (ov, bay_id, oi, px, py)
+        _, bay_id, oi, px, py = best_ov
+        entry = _empty_bay_entry_fast(sorted_sched[bay_id], r_time, proc)
+        return bay_id, oi, px, py, entry, entry + proc
 
     _, bay_id, oi, px, py, entry = best
     return bay_id, oi, px, py, entry, entry + proc
 
 
-def _guaranteed_solution(prob_info: dict) -> dict:
+def _guaranteed_solution(prob_info: dict, deadline: float | None = None) -> dict:
     """모든 블록을 빈-베이 윈도우로 직렬 배치한 feasible 해.
 
-    품질은 낮지만(베이별 직렬화 -> 지각 큼) 전역 검증 없이도 feasible이 보장된다.
-    P1의 절대 하한. O(블록수 x 베이수)로 밀리초면 끝난다.
+    품질은 낮지만(베이별 직렬화 -> 지각 큼) 전역 검증 없이도 feasible이 보장된다. P1의 절대
+    하한. 베이별 스케줄을 시작시각 정렬로 유지하고(`bisect.insort`) 빈-베이 윈도우를
+    `_empty_bay_entry_fast`로 구해, baseline의 초선형 floor를 거의 선형으로 낮춘다 -- 큰
+    인스턴스(블록 600·900)에서도 메인이 시간 안에 반환한다(스케일 −1 차단).
+
+    deadline: 벽시계 마감(없으면 무제한). 넘기면 *남은 블록을 즉시 단순 직렬 윈도우로 마감*해
+    무슨 일이 있어도 완전한 feasible operations를 시간 안에 낸다 -- 메인의 마지막 무경계 작업을
+    제거한다(supervisor가 construct에 한 것과 같은 정신).
 
     ★ 예외에 강건하다: 블록 하나가 망가져도(shape 누락 등) 그 블록만 자명한 기본 배치로
     떨어뜨려 *항상 모든 블록에 대한 완전한* operations를 만든다. 빈 operations는 곧
@@ -142,27 +189,49 @@ def _guaranteed_solution(prob_info: dict) -> dict:
     """
     bays = [Bay.from_dict(d, i) for i, d in enumerate(prob_info["bays"])]
     blocks_data = prob_info["blocks"]
+    # 베이별 스케줄을 시작시각 오름차순 정렬로 유지 -- _empty_bay_entry_fast의 전제.
     bay_schedule = [[] for _ in bays]
+    # 각 베이의 '마지막 exit'만 추적하면, fast-finish가 O(1)로 직렬 윈도우를 만들 수 있다.
+    bay_tail = [0 for _ in bays]
     assignments = []
     try:
         order = _edd_order(blocks_data)
     except Exception:
         order = list(range(len(blocks_data)))   # due_date/proc 누락 등 -- 입력 순서로
-    for bi in order:
+
+    n = len(order)
+    # deadline 체크 빈도(매 블록 time.time()은 큰 인스턴스서 비용) -- 64블록마다.
+    check_every = 64
+    fast_finish = False
+    for idx, bi in enumerate(order):
         blk_data = blocks_data[bi]
+        if (deadline is not None and not fast_finish
+                and idx % check_every == 0 and time.time() > deadline):
+            fast_finish = True      # 시간 부족 -- 남은 블록은 아래 단순 경로로 즉시 마감
+        if fast_finish:
+            # 가장 빨리 비는 베이(가장 작은 tail)에 release 이후 직렬로. O(베이).
+            r_time = int(blk_data.get("release_time", 0) or 0)
+            proc = int(blk_data.get("processing_time", 0) or 0)
+            bay_id = min(range(len(bays)), key=lambda j: max(bay_tail[j], r_time))
+            entry = max(bay_tail[bay_id], r_time)
+            oi, px, py, exit_t = 0, 0, 0, entry + proc
+            bay_tail[bay_id] = exit_t
+            assignments.append(_assignment(bi, bay_id, px, py, oi, entry, exit_t))
+            continue
         try:
             bay_id, oi, px, py, entry, exit_t = _guaranteed_place(blk_data, bays, bay_schedule)
         except Exception:
             # 망가진 블록: 베이 0, orient 0, 원점, release~release+proc의 자명 배치.
-            # 빈-베이 윈도우라 단독 체류는 feasible하고, 무엇보다 '미배치'를 피한다.
             r_time = int(blk_data.get("release_time", 0) or 0)
             proc = int(blk_data.get("processing_time", 0) or 0)
             try:
-                entry = _empty_bay_entry(bay_schedule[0], r_time, proc)
+                entry = _empty_bay_entry_fast(bay_schedule[0], r_time, proc)
             except Exception:
                 entry = r_time
             bay_id, oi, px, py, exit_t = 0, 0, 0, 0, entry + proc
-        bay_schedule[bay_id].append((entry, exit_t))
+        bisect.insort(bay_schedule[bay_id], (entry, exit_t))  # 정렬 유지
+        if exit_t > bay_tail[bay_id]:
+            bay_tail[bay_id] = exit_t
         assignments.append(_assignment(bi, bay_id, px, py, oi, entry, exit_t))
     return {"operations": _build_operations(assignments)}
 
@@ -311,9 +380,10 @@ def algorithm(prob_info, timelimit=60):
     # 이 cap이 거둔다.
     return_cap = t0 + tl * 0.93
 
-    # 1) floor: 빠르고(≤~0.7s) 증명적으로 feasible. 메인이 들고 있는 보장 답.
+    # 1) floor: 증명적으로 feasible한 보장 답. 정렬 빈-베이 윈도우로 거의 선형이라 보통 빠르나,
+    #    초대형 인스턴스 대비 deadline을 줘 *무조건* return_cap 안에 마치게 한다(스케일 −1 차단).
     try:
-        floor = _guaranteed_solution(prob_info)
+        floor = _guaranteed_solution(prob_info, deadline=return_cap)
     except Exception as e:
         print(f"[P1] {name}: guaranteed FAILED ({e!r})", flush=True)
         floor = {"operations": {}}

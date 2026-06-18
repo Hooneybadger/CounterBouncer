@@ -30,3 +30,5 @@
 | [09](./09-preference-polish.md) | 선호 재배치·교환 polish(obj3 국소탐색) | 측정완료 | B5·P5·P4b | LEARNING_GUIDE B5·F1 |
 | [10](./10-seed-portfolio.md) | 4코어 시드 포트폴리오(best-of-seeds) | 측정완료 | P4c·B3 | LEARNING_GUIDE E2 |
 | [11](./11-supervisor-feasibility.md) | supervisor 구조(메인=감독자, −1 구조제거) | 측정완료 | B1·P1·P4c | LEARNING_GUIDE F2 |
+| [12](./12-bay-clear-refill.md) | bay-clear-refill(obj3 국소탐색) | 채택 보류(노이즈) | B5·P5 | LEARNING_GUIDE B5·F1 |
+| [13](./13-floor-scale-hardening.md) | floor 스케일·경계 강건화(스케일 −1 제거) | 측정완료 | B1·P1 | LEARNING_GUIDE F2 |
