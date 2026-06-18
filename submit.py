@@ -25,7 +25,7 @@ EXCLUDED_PARTS = {"__pycache__", ".git", ".pytest_cache", ".mypy_cache"}
 EXCLUDED_NAMES = {"utils.py"}
 # 제출에 반드시 들어가야 하는 모듈(myalgorithm이 import하는 우리 코드). 검증용.
 REQUIRED_NAMES = {"myalgorithm.py", "constructor.py", "alns.py",
-                  "raster_engine.py", "baseline_greedy.py"}
+                  "raster_engine.py", "baseline_greedy.py", "relax_repair.py"}
 
 
 def load_dotenv(path: Path = ROOT / ".env") -> None:

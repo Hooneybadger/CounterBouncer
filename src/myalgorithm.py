@@ -45,6 +45,19 @@ except ImportError:  # IDE package layout
     )
     from ogc2026.src.alns import alns
 
+# relax-and-repair 구성기(obj1 전역 스케줄 레버). ortools 미가용·import 실패 시 안전하게
+# 비활성(표준 포트폴리오로 폴백). 평가 서버(ogc2026 env)엔 ortools가 있다.
+try:
+    try:
+        from relax_repair import relax_repair, ortools_available
+    except ImportError:
+        from ogc2026.src.relax_repair import relax_repair, ortools_available
+    _RELAX_OK = ortools_available()
+except Exception:
+    _RELAX_OK = False
+    def relax_repair(*a, **k):  # 폴백 스텁
+        return None
+
 
 # -----------------------------------------------------------------------------
 # 기하 헬퍼
@@ -337,6 +350,56 @@ def _worker_full(q, ir, prob_info, t0, timelimit, seed):
         pass
 
 
+def _worker_relax(q, ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
+    """relax-repair 자식: CP 코어 스케줄 → 크레인-repair로 base를 짓고 그 위에서 _improve.
+
+    obj1(지각)이 큰 정체 인스턴스에서 EDD-greedy가 못 깨는 전역 스케줄 국소최적을 깬다
+    (prob_38 5129→4583). relax_repair가 None이면(ortools無·CP실패) 표준 구성으로 폴백해
+    이 자식도 표준 시드처럼 동작한다 -- 그래서 relax는 *순수 추가*다(best-of가 무회귀 보장).
+    """
+    try:
+        rr = relax_repair(ir, prob_info, t0, timelimit, cp_cap=cp_cap, workers=cp_workers)
+        if rr is None:
+            inc = _construct_incumbent(ir, prob_info, t0, timelimit)
+            if inc is None:
+                r = None
+            else:
+                committed, loads, bw, _ = inc
+                r = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+        else:
+            committed, loads, bw = rr
+            r = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+    except Exception:
+        r = None
+    try:
+        q.put(r)
+    except Exception:
+        pass
+
+
+def _utilization(prob_info) -> float:
+    """혼잡도 = Σ(블록 bbox면적 × 체류) / (Σ베이면적 × horizon). obj1(지각) 발생의 물리 신호.
+
+    높을수록 베이가 시간상 빽빽 → 경합으로 지각이 forced. relax-repair가 이득인 영역을 가르는
+    *인스턴스 통계*다(번호·결과가 아니라 면적·시간만 봐 과적합 금지). 예외엔 0(=relax off)."""
+    try:
+        bays = prob_info["bays"]; blocks = prob_info["blocks"]
+        if not blocks or not bays:
+            return 0.0
+        horizon = max(int(b["due_date"]) for b in blocks) + 1
+        bt = 0.0
+        for b in blocks:
+            l0 = b["shape"][0]["layers"][0] if b.get("shape") else None
+            if not l0:
+                continue
+            xs = [v[0] for v in l0]; ys = [v[1] for v in l0]
+            bt += (max(xs) - min(xs)) * (max(ys) - min(ys)) * int(b["processing_time"])
+        cap = sum(by["width"] * by["height"] for by in bays) * horizon
+        return bt / cap if cap > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
 def _n_workers():
     """이 프로세스에 허용된 코어 수(taskset 핀을 존중). 평가 서버는 4코어를 핀한다.
     포트폴리오 크기를 여기에 맞춘다(자식 nw개, 메인은 감독자로 0개)."""
@@ -401,19 +464,32 @@ def algorithm(prob_info, timelimit=60):
         # 2) ir 빌드(≈3ms, hard-bounded). 구성은 *메인에서 하지 않는다* -- 자식이 한다.
         ir = InstanceRaster(prob_info)
 
-        # 3) 자식 nw개를 fork. 각 자식은 best-of-3 구성(결정적·동일 base)을 짓고 그 위에서
-        #    ALNS(base+i)+선호 개선을 돌려 결과를 큐에 넣는다(= v1.0.0 포트폴리오, 시드 분산).
-        #    ir은 읽기 전용으로 COW 공유된다. 메인은 _worker_full을 직접 호출하지 않는다 --
-        #    이것이 메인을 hard-bounded로 만든다.
+        # 3) 자식 nw개를 fork. 표준 자식은 best-of-3 구성 + ALNS(시드 분산, = v1.0.0 포트폴리오).
+        #    relax 가능하고 제한시간이 충분하면 자식 0을 relax-repair로(obj1 전역 스케줄 레버).
+        #    relax는 None이면 표준으로 폴백하므로 *순수 추가*다 -- best-of가 무회귀를 보장한다.
+        #    ir은 읽기 전용으로 COW 공유. 메인은 자식을 직접 호출하지 않아 hard-bounded.
+        # relax 게이트: ortools + 충분한 제한시간 + *혼잡 인스턴스*에만. relax는 obj1(지각)을
+        # 깎지만 CP가 obj3(선호)를 무시해 비혼잡(obj3-지배) 인스턴스에선 베이 할당을 망쳐 손해다.
+        # utilization(블록 면적·체류 합 / 베이 면적·horizon)이 혼잡도의 물리 측정이라, 이 통계로만
+        # 게이트한다(인스턴스 번호가 아니라 어떤 인스턴스에도 계산되는 양 -- 과적합 금지). 측정:
+        # obj3-지배 util≤0.42 vs obj1-지배 util≥0.42, 0.45가 깨끗한 분리선.
+        use_relax = _RELAX_OK and nw >= 2 and tl >= 30.0 and _utilization(prob_info) >= 0.45
+        cp_cap = min(tl * 0.15, 20.0)                       # 인스턴스 무관 비율 게이트(과적합 금지)
         procs, q = [], None
         try:
             ctx = multiprocessing.get_context("fork")
             q = ctx.Queue()
             for i in range(nw):
-                p = ctx.Process(
-                    target=_worker_full,
-                    args=(q, ir, prob_info, t0, tl, base + i),
-                    daemon=True)
+                if use_relax and i == 0:
+                    p = ctx.Process(
+                        target=_worker_relax,
+                        args=(q, ir, prob_info, t0, tl, base + i, cp_cap, nw),
+                        daemon=True)
+                else:
+                    p = ctx.Process(
+                        target=_worker_full,
+                        args=(q, ir, prob_info, t0, tl, base + i),
+                        daemon=True)
                 p.start()
                 procs.append(p)
         except Exception as e:  # fork 불가(seccomp 등) -- 자식 없이 진행
