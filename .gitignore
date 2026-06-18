@@ -48,3 +48,6 @@ results/
 # Temp files
 *.tmp
 /temp/
+
+# humanize-korean plugin scratch
+_workspace/

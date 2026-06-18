@@ -15,7 +15,7 @@ leaderboard:
     server, even though a solution exists).
   * Mimics the evaluation server: pins each solver to N CPU cores (taskset)
     and caps its memory (RLIMIT_AS), like firejail/cpulimit do server-side.
-  * Checks feasibility with the official baseline/utils.py checker (the same
+  * Checks feasibility with the official src/utils.py checker (the same
     code the server uses) in a separate process with its own timeout.
   * Saves everything under results/<run-name>/: summary.csv, per-instance
     solution JSON, per-instance solver logs, and run metadata.
@@ -25,11 +25,11 @@ leaderboard:
 
 Usage examples
 --------------
-  # Run the baseline on all training instances, 60s limit, server-like limits
-  python batch_runner.py run --alg baseline --timelimit 60 --name base60
+  # Run the src on all training instances, 60s limit, server-like limits
+  python batch_runner.py run --alg src --timelimit 60 --name base60
 
   # Quick smoke test on two instances
-  python batch_runner.py run -a baseline -i train/prob_1.json train/prob_2.json -t 30
+  python batch_runner.py run -a src -i train/prob_1.json train/prob_2.json -t 30
 
   # Compare two (or more) runs: regression report + rank-score simulation
   python batch_runner.py compare results/base60 results/myalg_v2
@@ -61,7 +61,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ROOT = pathlib.Path(__file__).resolve().parent
-UTILS_DIR = ROOT / "baseline"          # canonical utils.py (identical to alg_tester's)
+UTILS_DIR = ROOT / "src"          # canonical utils.py (identical to alg_tester's)
 DEFAULT_INSTANCES = sorted(
     glob.glob(str(ROOT / "train" / "prob_*.json")),
     key=lambda p: int(re.search(r"(\d+)", pathlib.Path(p).stem).group(1)),
@@ -441,8 +441,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="run an algorithm over instances")
-    r.add_argument("-a", "--alg", default=str(ROOT / "baseline"),
-                   help="folder containing myalgorithm.py (default: baseline)")
+    r.add_argument("-a", "--alg", default=str(ROOT / "src"),
+                   help="folder containing myalgorithm.py (default: src)")
     r.add_argument("-i", "--instances", nargs="*", default=None,
                    help="instance JSON files (default: all train/prob_*.json)")
     r.add_argument("-t", "--timelimit", type=float, default=60.0,
