@@ -29,3 +29,4 @@
 | [08](./08-repair-acceleration.md) | repair 가속(핫패스 인라인) | 측정완료 | B3·P4 | LEARNING_GUIDE E2 |
 | [09](./09-preference-polish.md) | 선호 재배치·교환 polish(obj3 국소탐색) | 측정완료 | B5·P5·P4b | LEARNING_GUIDE B5·F1 |
 | [10](./10-seed-portfolio.md) | 4코어 시드 포트폴리오(best-of-seeds) | 측정완료 | P4c·B3 | LEARNING_GUIDE E2 |
+| [11](./11-supervisor-feasibility.md) | supervisor 구조(메인=감독자, −1 구조제거) | 측정완료 | B1·P1·P4c | LEARNING_GUIDE F2 |

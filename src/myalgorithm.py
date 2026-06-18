@@ -134,14 +134,34 @@ def _guaranteed_solution(prob_info: dict) -> dict:
 
     품질은 낮지만(베이별 직렬화 -> 지각 큼) 전역 검증 없이도 feasible이 보장된다.
     P1의 절대 하한. O(블록수 x 베이수)로 밀리초면 끝난다.
+
+    ★ 예외에 강건하다: 블록 하나가 망가져도(shape 누락 등) 그 블록만 자명한 기본 배치로
+    떨어뜨려 *항상 모든 블록에 대한 완전한* operations를 만든다. 빈 operations는 곧
+    infeasible(Stage1: 미배치 블록)이므로, floor가 발동하는 비상 상황에서 절대 빈 dict를
+    내선 안 된다 -- 이 함수가 빈 결과를 내지 않게 막는 것이 feasibility-first의 마지막 보루다.
     """
     bays = [Bay.from_dict(d, i) for i, d in enumerate(prob_info["bays"])]
     blocks_data = prob_info["blocks"]
     bay_schedule = [[] for _ in bays]
     assignments = []
-    for bi in _edd_order(blocks_data):
+    try:
+        order = _edd_order(blocks_data)
+    except Exception:
+        order = list(range(len(blocks_data)))   # due_date/proc 누락 등 -- 입력 순서로
+    for bi in order:
         blk_data = blocks_data[bi]
-        bay_id, oi, px, py, entry, exit_t = _guaranteed_place(blk_data, bays, bay_schedule)
+        try:
+            bay_id, oi, px, py, entry, exit_t = _guaranteed_place(blk_data, bays, bay_schedule)
+        except Exception:
+            # 망가진 블록: 베이 0, orient 0, 원점, release~release+proc의 자명 배치.
+            # 빈-베이 윈도우라 단독 체류는 feasible하고, 무엇보다 '미배치'를 피한다.
+            r_time = int(blk_data.get("release_time", 0) or 0)
+            proc = int(blk_data.get("processing_time", 0) or 0)
+            try:
+                entry = _empty_bay_entry(bay_schedule[0], r_time, proc)
+            except Exception:
+                entry = r_time
+            bay_id, oi, px, py, exit_t = 0, 0, 0, 0, entry + proc
         bay_schedule[bay_id].append((entry, exit_t))
         assignments.append(_assignment(bi, bay_id, px, py, oi, entry, exit_t))
     return {"operations": _build_operations(assignments)}
@@ -152,9 +172,14 @@ def _guaranteed_solution(prob_info: dict) -> dict:
 # -----------------------------------------------------------------------------
 
 def _construct_incumbent(ir, prob_info, t0, timelimit):
-    """구성기 포트폴리오 -- (순서, 위치후보) best-of. 시드와 무관(결정적)하므로 메인에서
-    딱 한 번만 돌리고, 그 incumbent를 fork로 모든 워커에 공유한다. 그래야 큰 인스턴스의
-    무거운 구성이 워커 경합에 늦춰져 더 나쁜 base로 추락하는 일을 막는다.
+    """구성기 포트폴리오 -- (순서, 위치후보) best-of-3. 결정적(시드 무관)이라 모든 자식이
+    같은 최고 base를 얻고, 그 위에서 시드별 ALNS가 분산을 낸다(= v1.0.0 포트폴리오).
+
+    v1.0.0은 이 best-of-3를 메인에서 한 번만 돌려 fork로 공유했으나, 그 구성이 메인을
+    묶어 짧은 제한시간에 overrun했다(P3). v1.1은 *각 자식이* 이 함수를 독립으로 돌린다 --
+    결정적이라 결과 base는 모든 자식이 동일하고(품질은 v1.0.0과 일치), 무거운 구성이
+    종료 가능한 자식 안에 있어 메인은 hard-bounded로 남는다. 전용 4코어에선 4중 중복 구성이
+    병렬이라 벽시계 손해가 없다(메인 단독 구성 때 놀던 코어를 쓰는 것뿐).
 
     반환: (committed, loads, bw, obj) 또는 None.
     """
@@ -185,15 +210,19 @@ def _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed, verbose=F
     blocks_data = prob_info["blocks"]
     w = prob_info.get("weights", {})
     w1, w2, w3 = w.get("w1", 1.0), w.get("w2", 1.0), w.get("w3", 1.0)
+    # 예산: ALNS 0.83 / polish 0.88. 그 뒤 최종 check(중단 불가능 tail)가 보통 ~0.89-0.90에
+    # 끝나, 메인 supervisor의 수집 cap(0.93*tl)이 거둔다. 못 거두면 메인은 floor를 반환한다
+    # (feasibility-first). 이 함수는 (fork 가능한 환경에선) 항상 자식 프로세스에서 돈다 --
+    # 그래서 여기서 어떤 tail이 지연돼도 메인의 벽시계는 묶이지 않는다.
     try:
-        if time.time() - t0 < timelimit * 0.80:
+        if time.time() - t0 < timelimit * 0.83:
             rng = random.Random(seed)
             snap, _, _ = alns(prob_info, ir, committed, loads, bw,
                               t0 + timelimit * 0.83, rng, cand="blf")
             committed = snap
             loads = loads_from_committed(committed, blocks_data, len(prob_info["bays"]))
-        if time.time() - t0 < timelimit * 0.90:
-            pdl = t0 + timelimit * 0.90
+        if time.time() - t0 < timelimit * 0.88:
+            pdl = t0 + timelimit * 0.88
             pref_polish(ir, prob_info, committed, loads, bw, w1, w2, w3, pdl)
             pref_swap(ir, prob_info, committed, loads, bw, w1, w2, w3, pdl)
     except Exception as e:
@@ -210,17 +239,27 @@ def _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed, verbose=F
     return None
 
 
-def _worker_improve(q, ir, prob_info, committed, loads, bw, t0, timelimit, seed):
-    """워커 본체: fork로 상속한 incumbent에서 _improve(seed)를 돌리고 결과를 Queue에 넣는다.
+def _worker_full(q, ir, prob_info, t0, timelimit, seed):
+    """워커 본체(v1.1): best-of-3 구성 + _improve(seed)를 통째로 돌려 결과를 Queue에 넣는다.
+    *구성까지 자식이 한다* -- 이것이 메인을 hard-bounded로 만드는 핵심이다.
 
-    fork 컨텍스트라 함수·인자(무거운 committed·ir 포함)가 피클되지 않고 COW로 상속된다
-    (ProcessPoolExecutor는 함수를 qualified-name으로 피클하다 평가 서버의 importlib 로드와
-    충돌해 PicklingError가 난다 -- 그래서 fork Process를 쓴다). Queue로 돌려보내는 결과
-    (obj, 해)만 피클되며 평범한 dict/list라 안전하다. committed는 COW 복사본이라 이 워커의
-    in-place 변형이 메인·다른 워커와 격리된다.
+    구성은 deadline을 넘기면 남은 블록을 빠른 경로로 마감하느라 ~floor_time(300블록≈0.6s)
+    overrun할 수 있다. v1.0.0은 이 구성을 메인에서 돌려, 짧은 제한시간에 메인이 그 overrun에
+    묶여 floor를 제때 못 냈다(P3 -1의 한 갈래). 이제 그 무거운 일은 전부 여기, 종료 가능한
+    자식 안에 있다 -- 메인은 timeout-bounded 큐 수집만 한다. 구성은 결정적이라 모든 자식이
+    같은 최고 base를 얻고(품질 v1.0.0과 일치), 시드만 ALNS에서 갈린다.
+
+    fork 컨텍스트라 함수·인자(ir 포함)가 피클되지 않고 COW로 상속된다. ir은 읽기 전용으로
+    공유되고(메인이 만든 immutable 인스턴스 데이터), 구성이 만드는 committed는 자식 고유라
+    격리된다. Queue로 돌려보내는 결과(obj, 해)만 피클되며 평범한 dict/list라 안전하다.
     """
     try:
-        r = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+        incumbent = _construct_incumbent(ir, prob_info, t0, timelimit)
+        if incumbent is None:
+            r = None
+        else:
+            committed, loads, bw, _ = incumbent
+            r = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
     except Exception:
         r = None
     try:
@@ -231,7 +270,7 @@ def _worker_improve(q, ir, prob_info, committed, loads, bw, t0, timelimit, seed)
 
 def _n_workers():
     """이 프로세스에 허용된 코어 수(taskset 핀을 존중). 평가 서버는 4코어를 핀한다.
-    포트폴리오 크기를 여기에 맞춰, 메인 1개 in-process + 나머지를 워커로 돌린다."""
+    포트폴리오 크기를 여기에 맞춘다(자식 nw개, 메인은 감독자로 0개)."""
     try:
         n = len(os.sched_getaffinity(0))   # taskset/affinity 존중(서버에서 4)
     except (AttributeError, OSError):
@@ -245,99 +284,126 @@ _BASE_SEED = 20260617
 def algorithm(prob_info, timelimit=60):
     """무슨 일이 있어도 제한시간 안에 feasible한 해를 반환한다(feasibility-first anytime).
 
-      1) floor: 증명 가능한 안전망(_guaranteed_solution). 절대 실패하지 않는 하한.
-      2) 4코어 포트폴리오: 메인이 시드 0을 in-process로 돌리고, 남는 코어에 시드 1~N-1
-         워커를 병렬로 띄워 best-of-seeds를 취한다. ALNS는 시드마다 다른 궤적을 그리고,
-         그 분산이 커서(측정: prob_16 spread 37.7%) best-of가 단일을 크게 이긴다(p4c).
-      3) best feasible obj를 채택. 워커가 다 실패해도 메인 시드 0(=옛 단일 실행)이 남고,
-         멀티프로세싱 자체가 깨져도 floor가 남는다 -- -1은 어떤 경우에도 없다.
+    ★ v1.1 supervisor 구조 (P3 infeasible 회귀 수정의 핵심):
+      메인은 '감독자'다. 빠르고 hard-bounded한 일(floor ≤~0.7s, ir 빌드 ≈3ms)만 직접 하고,
+      구성(construct)·ALNS·선호 개선·최종 check 같은 *중단 불가능하거나 짧은 제한시간에
+      overrun하는 무거운 일*은 전부 fork 자식이 한다. 그래서 어느 자식이 느린 Shapely 호출에
+      묶이거나 construct fast-finish로 늦거나 OOM으로 죽어도, 메인의 벽시계는 자식과 무관하게
+      흐른다 -- 메인은 timeout으로 묶인 큐 수집만 하다가 return_cap(0.93*tl)에 반드시
+      floor-or-best를 반환한다.
 
-    구성은 _construct_incumbent가 메인에서 한 번만(시드 무관) 돌고, 시드별 ALNS+선호 개선은
-    _improve가 한다(메인 in-process, 워커는 fork로 incumbent를 COW 상속받아 병렬로).
+      v1.0.0은 구성과 시드 0의 _improve를 메인에서 돌렸다. construct는 deadline을 넘겨도 남은
+      블록을 마저 처리하느라 ~floor_time(300블록≈0.6s) overrun하고, 시드 0의 ALNS/최종 check도
+      메인을 묶는다. 느린 인스턴스(P3)에서 이 누적 tail이 벽시계를 넘기면 메인이 floor를 제때
+      못 내 -1을 받았다(측정: 2s 제한시간에 300블록이 3.1s에 overtime). 이제 그 경로가
+      구조적으로 사라진다 -- 메인엔 overrun할 무거운 일이 없다.
+
+      worst case: 자식이 전부 제때 결과를 못 주면 메인은 floor(증명적 feasible)를 반환한다 --
+      품질은 낮아도 −1은 아니다. 이것이 feasibility-first의 본령이다.
     """
     t0 = time.time()
     name = prob_info.get("name", "?")
     n = len(prob_info.get("blocks", []))
+    tl = float(timelimit)
+    # 메인은 무슨 일이 있어도 이 시각까지 반환한다(CLAUDE.md 절대 규칙 0.93*tl). 메인은
+    # 여기 이후 무거운 일을 안 하므로(수집·종료·min·반환만, ~ms) 7% 여유가 느린 서버의
+    # 직렬화·IPC tail까지 덮는다. 자식 _improve는 polish 0.88 + 최종 check로 ~0.90에 끝나
+    # 이 cap이 거둔다.
+    return_cap = t0 + tl * 0.93
 
+    # 1) floor: 빠르고(≤~0.7s) 증명적으로 feasible. 메인이 들고 있는 보장 답.
     try:
         floor = _guaranteed_solution(prob_info)
     except Exception as e:
         print(f"[P1] {name}: guaranteed FAILED ({e!r})", flush=True)
-        return {"operations": {}}
+        floor = {"operations": {}}
 
     run_idx = int(os.environ.get("OGC_RUN_INDEX", "0") or "0")
     nw = _n_workers()
-    base = _BASE_SEED + 100 * run_idx          # --repeat가 포트폴리오 전체를 흔들 여지
+    base = _BASE_SEED + 100 * run_idx
     results = []
 
-    # 2) 구성: 메인이 한 번만(시드 무관·결정적). 워커 경합이 시작되기 전에 끝나, 큰
-    #    인스턴스의 무거운 scan 구성이 늦춰져 더 나쁜 base로 추락하는 일을 막는다.
+    # 전역 가드: 아래 어디서 무엇이 터져도 floor를 반환한다.
     try:
+        if time.time() > return_cap:
+            return floor
+
+        # 2) ir 빌드(≈3ms, hard-bounded). 구성은 *메인에서 하지 않는다* -- 자식이 한다.
         ir = InstanceRaster(prob_info)
-        incumbent = _construct_incumbent(ir, prob_info, t0, timelimit)
-    except Exception as e:
-        print(f"[P3] {name}: construct FAILED ({e!r}) -- floor 반환", flush=True)
-        incumbent = None
 
-    if incumbent is not None:
-        committed, loads, bw, _ = incumbent
-
-        # 3) 워커: 시드 1..nw-1. fork로 incumbent(committed·ir)를 COW 상속받아 ALNS+선호
-        #    개선만 병렬화한다. fork Process라 (1) 무거운 인자가 피클 안 됨(평가 서버의
-        #    importlib 로드와 무관), (2) daemon이라 메인 종료 시 자동으로 죽어 행이 불가능
-        #    하다 -- feasibility-first의 절대선. 워커는 committed의 COW 복사본을 변형하므로
-        #    메인·다른 워커와 격리된다.
+        # 3) 자식 nw개를 fork. 각 자식은 best-of-3 구성(결정적·동일 base)을 짓고 그 위에서
+        #    ALNS(base+i)+선호 개선을 돌려 결과를 큐에 넣는다(= v1.0.0 포트폴리오, 시드 분산).
+        #    ir은 읽기 전용으로 COW 공유된다. 메인은 _worker_full을 직접 호출하지 않는다 --
+        #    이것이 메인을 hard-bounded로 만든다.
         procs, q = [], None
-        if nw > 1 and time.time() - t0 < timelimit * 0.80:
-            try:
-                ctx = multiprocessing.get_context("fork")
-                q = ctx.Queue()
-                for i in range(1, nw):
-                    p = ctx.Process(
-                        target=_worker_improve,
-                        args=(q, ir, prob_info, committed, loads, bw, t0, timelimit,
-                              base + i),
-                        daemon=True)
-                    p.start()
-                    procs.append(p)
-            except Exception as e:  # fork 불가 등 -- 메인 단독으로 진행
-                print(f"[P4c] {name}: worker spawn FAILED ({e!r}) -- 단독 실행", flush=True)
-                procs, q = [], None
-
-        # 메인: 시드 0(=옛 단일 실행)을 in-process로. 워커가 다 죽어도 이게 남는다. 워커는
-        # 이미 fork로 incumbent를 snapshot했으므로, 메인이 committed를 in-place 변형해도 무관.
-        r0 = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, base,
-                      verbose=True)
-        if r0 is not None:
-            results.append(r0)
-
-        # 워커 수확(best-effort, 0.95*timelimit 안에서만). 워커마다 정확히 한 번 put.
-        collect_dl = t0 + timelimit * 0.95
-        got = 0
-        while q is not None and got < len(procs) and time.time() < collect_dl:
-            try:
-                r = q.get(timeout=max(0.01, collect_dl - time.time()))
-            except Exception:        # queue.Empty(타임아웃) 등 -- 더 안 기다린다
-                break
-            got += 1
-            if r is not None:
-                results.append(r)
-
-        # 안전벨트: 남은 워커를 즉시 종료(daemon이라 종료는 보장되나 명시적으로). 메인이
-        # 종료에서 멈추는 것 = timelimit 초과 = -1 이라 무슨 일이 있어도 막는다.
-        for p in procs:
-            try:
-                if p.is_alive():
+        try:
+            ctx = multiprocessing.get_context("fork")
+            q = ctx.Queue()
+            for i in range(nw):
+                p = ctx.Process(
+                    target=_worker_full,
+                    args=(q, ir, prob_info, t0, tl, base + i),
+                    daemon=True)
+                p.start()
+                procs.append(p)
+        except Exception as e:  # fork 불가(seccomp 등) -- 자식 없이 진행
+            print(f"[P4c] {name}: fork FAILED ({e!r}) -- 메인 단독(degraded)", flush=True)
+            for p in procs:
+                try:
                     p.terminate()
+                except Exception:
+                    pass
+            procs, q = [], None
+
+        if procs:
+            # 메인 = supervisor. return_cap까지 timeout-bounded로 수집만 한다.
+            got = 0
+            while got < len(procs) and time.time() < return_cap:
+                try:
+                    r = q.get(timeout=max(0.01, return_cap - time.time()))
+                except Exception:   # queue.Empty(타임아웃) 등 -- 더 안 기다린다
+                    break
+                got += 1
+                if r is not None:
+                    results.append(r)
+            # 남은 자식 즉시 종료(daemon이라 보장되나 명시적으로). terminate는 비동기라 tail 없음.
+            for p in procs:
+                try:
+                    if p.is_alive():
+                        p.terminate()
+                except Exception:
+                    pass
+            try:
+                q.cancel_join_thread()   # 인터프리터 종료 시 feeder thread join 회피
             except Exception:
                 pass
+        else:
+            # fork 불가 환경에서만(degraded): 메인에서 구성 하나 + 시드 하나를 best-effort로.
+            # 이 경로만 메인이 무거운 일을 하나, fork가 없으니 달리 방법이 없다. 짧은 제한시간엔
+            # overrun 위험이 있으나 floor가 이미 손에 있어 -1로 가진 않는다(반환 직전 가드).
+            if time.time() < t0 + tl * 0.5:
+                try:
+                    committed, loads, bw = construct(
+                        prob_info, t0, tl, ir=ir, order="edd", cand="scan", return_state=True)
+                    if time.time() < return_cap:
+                        r0 = _improve(ir, prob_info, committed, loads, bw, t0, tl, base,
+                                      verbose=True)
+                        if r0 is not None:
+                            results.append(r0)
+                except Exception as e:
+                    print(f"[P3] {name}: degraded construct FAILED ({e!r})", flush=True)
+    except Exception as e:
+        print(f"[P?] {name}: unexpected ({e!r}) -- floor 반환", flush=True)
 
+    # 메인은 return_cap(0.93*tl)에 수집을 끝내므로 여기 도달 시각은 늘 그 부근이다.
+    # best_sol·floor 둘 다 이미 만들어진 feasible dict이라 반환은 즉시 -- 시간 가드로 best를
+    # floor로 강등할 이유가 없다(둘 다 같은 비용). 있으면 best, 없으면 floor.
     if results:
         best_obj, best_sol = min(results, key=lambda r: r[0])
-        print(f"[P4c] {name}: n={n} seeds={len(results)}/{nw} best_obj={best_obj:.0f} "
-              f"elapsed={time.time()-t0:.3f}s/{timelimit:.0f}s", flush=True)
+        print(f"[P11] {name}: n={n} seeds={len(results)}/{nw} best_obj={best_obj:.0f} "
+              f"elapsed={time.time()-t0:.3f}s/{tl:.0f}s", flush=True)
         return best_sol
 
-    print(f"[P1] {name}: n={n} tier=guaranteed(floor) "
-          f"elapsed={time.time()-t0:.3f}s/{timelimit:.0f}s", flush=True)
+    print(f"[P1] {name}: n={n} tier=floor "
+          f"elapsed={time.time()-t0:.3f}s/{tl:.0f}s", flush=True)
     return floor
