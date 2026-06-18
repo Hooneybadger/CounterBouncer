@@ -62,6 +62,8 @@
 - **incumbent(현행 최선 해)** — 지금까지 찾은 가장 좋은 feasible 해. 개선 루프는 더 나은 feasible 해를 찾을 때만 이걸 교체한다.
 - **anytime(언제든 멈춰도 되는)** — 언제 중단당해도 그 순간의 incumbent를 즉시 내놓을 수 있는 알고리즘 구조.
 - **시간 가드(time guard)** — 벽시계가 `timelimit × 0.93`에 닿으면 무조건 incumbent를 반환하는 자기 검열. 마지막 검증 비용까지 예산에 넣는다.
+- **supervisor 구조(메인=감독자)** — 메인 프로세스는 빠르고 시간이 묶일 수 없는 일(floor·래스터 엔진)만 직접 하고, 구성·ALNS·선호 개선·최종 검증처럼 *중단 불가능하거나 짧은 제한시간에 overrun하는* 무거운 일은 전부 종료 가능한 fork 자식이 한다. 메인은 `return_cap`까지 큐에서 결과를 거두기만 하다 floor-or-best를 반환하므로, 자식이 느린 Shapely 호출에 묶이거나 OOM으로 죽어도 메인 벽시계는 자식과 무관해 −1이 구조적으로 불가능하다. (v1.0.1, → [features/11](./features/11-supervisor-feasibility.md))
+- **floor(보장 안전망)** — 모든 블록을 빈-베이 윈도우로 직렬 배치한, 검증 없이도 feasible이 보장되는 최후의 해. 메인이 항상 손에 쥐고 있다가 자식이 제때 더 나은 해를 못 주면 반환한다. 품질은 낮아도(직렬화→지각 큼) −1을 막는 절대 하한. 블록수에 거의 선형이고 deadline fast-finish로 어떤 스케일에서도 시간 안에 완성된다. (→ [features/01](./features/01-feasibility-first-wrapper.md)·[features/13](./features/13-floor-scale-hardening.md))
 - **feasibility-by-construction(구성에 의한 보장)** — 해를 만든 뒤 검사해서 고치는 게 아니라, *놓는 순간* 규칙을 지켜 처음부터 feasible만 만드는 방식. 사후 검증·repair가 필요 없다.
 - **빈-베이 윈도우(empty-bay window)** — 그 구간 동안 베이가 *완전히 비어 있는* 시간 창. 거기에 블록을 넣으면 부딪힐 다른 블록이 없어 크레인 진입·반출·충돌(stage 2/3/4)이 자명히 통과한다. P1 안전망의 핵심. (→ [features/01](./features/01-feasibility-first-wrapper.md))
 - **EDD(Earliest Due Date)** — 납기 빠른 블록부터 처리하는 정렬 규칙. 단일 기계 최대 지각 최소화에 최적인 고전 휴리스틱. 동률은 처리시간 짧은 순(SPT)으로 가른다. (배경: LEARNING_GUIDE B3)
