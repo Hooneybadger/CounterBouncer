@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import bisect
 import math
-import multiprocessing
+import multiprocessing  # 비-daemon 환경 호환용(현재 경로는 os.fork 사용)
 import os
+import pickle
 import random
+import shutil
+import signal
+import tempfile
 import time
 
 try:  # flat layout: evaluation server / batch_runner
@@ -321,60 +325,153 @@ def _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed, verbose=F
     return None
 
 
-def _worker_full(q, ir, prob_info, t0, timelimit, seed):
-    """워커 본체(v1.1): best-of-3 구성 + _improve(seed)를 통째로 돌려 결과를 Queue에 넣는다.
-    *구성까지 자식이 한다* -- 이것이 메인을 hard-bounded로 만드는 핵심이다.
+def _full_body(ir, prob_info, t0, timelimit, seed):
+    """표준 워커 본체: best-of-3 구성 + _improve(seed). feasible (obj, 해) 또는 None.
+    *구성까지 워커가 한다* -- 이것이 메인을 hard-bounded로 만드는 핵심이다(메인은 수집만).
+    구성은 결정적이라 모든 워커가 같은 최고 base를 얻고, 시드만 ALNS에서 갈린다."""
+    incumbent = _construct_incumbent(ir, prob_info, t0, timelimit)
+    if incumbent is None:
+        return None
+    committed, loads, bw, _ = incumbent
+    return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
 
-    구성은 deadline을 넘기면 남은 블록을 빠른 경로로 마감하느라 ~floor_time(300블록≈0.6s)
-    overrun할 수 있다. v1.0.0은 이 구성을 메인에서 돌려, 짧은 제한시간에 메인이 그 overrun에
-    묶여 floor를 제때 못 냈다(P3 -1의 한 갈래). 이제 그 무거운 일은 전부 여기, 종료 가능한
-    자식 안에 있다 -- 메인은 timeout-bounded 큐 수집만 한다. 구성은 결정적이라 모든 자식이
-    같은 최고 base를 얻고(품질 v1.0.0과 일치), 시드만 ALNS에서 갈린다.
 
-    fork 컨텍스트라 함수·인자(ir 포함)가 피클되지 않고 COW로 상속된다. ir은 읽기 전용으로
-    공유되고(메인이 만든 immutable 인스턴스 데이터), 구성이 만드는 committed는 자식 고유라
-    격리된다. Queue로 돌려보내는 결과(obj, 해)만 피클되며 평범한 dict/list라 안전하다.
-    """
+def _relax_body(ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
+    """relax-repair 워커: CP 코어 스케줄 → 크레인-repair base 위에서 _improve. relax_repair가
+    None이면(ortools無·CP실패) 표준 구성으로 폴백 -- relax는 *순수 추가*(best-of가 무회귀 보장)."""
+    rr = relax_repair(ir, prob_info, t0, timelimit, cp_cap=cp_cap, workers=cp_workers)
+    if rr is None:
+        return _full_body(ir, prob_info, t0, timelimit, seed)
+    committed, loads, bw = rr
+    return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+
+
+def _child_body(i, ir, prob_info, t0, tl, base, use_relax, cp_cap, nw):
+    """자식 i가 실행할 본체. 자식 0이 relax 가능하면 relax, 아니면 표준. 예외엔 None."""
     try:
-        incumbent = _construct_incumbent(ir, prob_info, t0, timelimit)
-        if incumbent is None:
-            r = None
-        else:
-            committed, loads, bw, _ = incumbent
-            r = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+        if use_relax and i == 0:
+            return _relax_body(ir, prob_info, t0, tl, base + i, cp_cap, nw)
+        return _full_body(ir, prob_info, t0, tl, base + i)
     except Exception:
-        r = None
+        return None
+
+
+def _run_forked(ir, prob_info, t0, tl, base, nw, use_relax, cp_cap, return_cap):
+    """raw os.fork() supervisor -- nw 자식을 띄워 결과를 임시파일로 수집. ★서버(daemon 프로세스)
+    에서도 동작한다: multiprocessing.Process는 'daemonic processes are not allowed to have
+    children'으로 막히지만 os.fork()는 OS 직접호출이라 통과한다(v1.1.0 P3 -1의 근본 수정 --
+    그땐 fork 실패→메인 단독 construct가 큰 인스턴스서 overrun→-1).
+
+    자식은 ir/prob_info를 COW로 상속(피클 불필요), 결과만 임시파일에 피클(원자적 rename으로
+    '존재=완전기록' 보장). 메인=supervisor는 return_cap까지 *종료한* 자식 결과만 비차단 수집하고
+    (heavy work 없음=bounded), 미완 자식은 SIGKILL+reap한다. os.fork 자체가 불가(seccomp 등)면
+    OSError를 올려 호출부가 in-process 폴백하게 한다. 반환: results 리스트."""
+    children = []
+    tmpdir = tempfile.mkdtemp(prefix="ogc_")
     try:
-        q.put(r)
-    except Exception:
-        pass
-
-
-def _worker_relax(q, ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
-    """relax-repair 자식: CP 코어 스케줄 → 크레인-repair로 base를 짓고 그 위에서 _improve.
-
-    obj1(지각)이 큰 정체 인스턴스에서 EDD-greedy가 못 깨는 전역 스케줄 국소최적을 깬다
-    (prob_38 5129→4583). relax_repair가 None이면(ortools無·CP실패) 표준 구성으로 폴백해
-    이 자식도 표준 시드처럼 동작한다 -- 그래서 relax는 *순수 추가*다(best-of가 무회귀 보장).
-    """
-    try:
-        rr = relax_repair(ir, prob_info, t0, timelimit, cp_cap=cp_cap, workers=cp_workers)
-        if rr is None:
-            inc = _construct_incumbent(ir, prob_info, t0, timelimit)
-            if inc is None:
-                r = None
+        for i in range(nw):
+            path = os.path.join(tmpdir, f"r{i}.pkl")
+            pid = os.fork()
+            if pid == 0:
+                # ---- CHILD ---- COW 상속. 결과만 임시파일에. 파이썬 정리 건너뛰어(os._exit)
+                # 부모 상태(열린 fd·락) 오염 방지.
+                try:
+                    r = _child_body(i, ir, prob_info, t0, tl, base, use_relax, cp_cap, nw)
+                    if r is not None:
+                        with open(path + ".tmp", "wb") as f:
+                            pickle.dump(r, f)
+                        os.rename(path + ".tmp", path)  # 원자적: 존재하면 완전기록
+                except Exception:
+                    pass
+                os._exit(0)
             else:
-                committed, loads, bw, _ = inc
-                r = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
-        else:
-            committed, loads, bw = rr
-            r = _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
-    except Exception:
-        r = None
+                children.append((pid, path))
+    except OSError:
+        _kill_all(children)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+    results = []
+    done = set()
+    while len(done) < len(children) and time.time() < return_cap:
+        progressed = False
+        for pid, path in children:
+            if pid in done:
+                continue
+            try:
+                wpid, _st = os.waitpid(pid, os.WNOHANG)
+            except OSError:
+                wpid = pid  # 이미 reap됨
+            if wpid == pid:
+                done.add(pid); progressed = True
+                try:
+                    if os.path.exists(path):
+                        with open(path, "rb") as f:
+                            r = pickle.load(f)
+                        if r is not None:
+                            results.append(r)
+                except Exception:
+                    pass
+        if not progressed and len(done) < len(children):
+            time.sleep(0.01)  # busy-wait 방지 -- return_cap이 상한
+    _kill_all([(pid, path) for pid, path in children if pid not in done])
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    return results
+
+
+def _kill_all(children):
+    """남은 자식을 SIGKILL + reap(좀비 방지). terminate가 아니라 KILL이라 C 확장(CP-SAT·
+    Shapely)에 묶인 자식도 확실히 죽는다."""
+    for pid, _path in children:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except Exception:
+            pass
+
+
+class _MainTimeout(BaseException):
+    """SIGALRM 시간초과 신호. ★BaseException 상속 -- construct 등 내부의 `except Exception`에
+    삼켜지지 않고 _in_process_bounded까지 전파돼야 알람이 실제로 work를 끊는다."""
+    pass
+
+
+def _raise_main_timeout(signum, frame):
+    raise _MainTimeout()
+
+
+def _in_process_bounded(ir, prob_info, t0, tl, base, return_cap):
+    """os.fork 자체가 불가(seccomp 등)한 극단 환경의 폴백 -- 메인에서 단일 구성+개선을 SIGALRM으로
+    hard-bound한다. construct가 deadline을 무시하고 overrun해도(900블록 16s 실측) return_cap에
+    알람이 _MainTimeout을 올려 中斷→ 호출부가 floor를 반환한다(-1 차단). 알람을 못 걸면(비-메인
+    스레드) overrun 위험을 피해 빈 결과(floor만)를 준다. 반환: results 리스트."""
+    budget = return_cap - time.time()
+    if budget <= 0.1:
+        return []
     try:
-        q.put(r)
+        old = signal.signal(signal.SIGALRM, _raise_main_timeout)
+    except Exception:
+        return []  # 비-메인 스레드: 알람 불가 -> overrun 위험 피해 floor만
+    results = []
+    signal.setitimer(signal.ITIMER_REAL, budget)
+    try:
+        r = _full_body(ir, prob_info, t0, tl, base)
+        if r is not None:
+            results.append(r)
+    except _MainTimeout:
+        pass  # 알람 = return_cap 도달, construct overrun을 끊음 -> floor 폴백
     except Exception:
         pass
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        try:
+            signal.signal(signal.SIGALRM, old)
+        except Exception:
+            pass
+    return results
 
 
 def _utilization(prob_info) -> float:
@@ -464,10 +561,11 @@ def algorithm(prob_info, timelimit=60):
         # 2) ir 빌드(≈3ms, hard-bounded). 구성은 *메인에서 하지 않는다* -- 자식이 한다.
         ir = InstanceRaster(prob_info)
 
-        # 3) 자식 nw개를 fork. 표준 자식은 best-of-3 구성 + ALNS(시드 분산, = v1.0.0 포트폴리오).
-        #    relax 가능하고 제한시간이 충분하면 자식 0을 relax-repair로(obj1 전역 스케줄 레버).
-        #    relax는 None이면 표준으로 폴백하므로 *순수 추가*다 -- best-of가 무회귀를 보장한다.
-        #    ir은 읽기 전용으로 COW 공유. 메인은 자식을 직접 호출하지 않아 hard-bounded.
+        # 3) 자식 nw개를 raw os.fork()로 띄운다(★daemon 서버서도 동작 -- v1.1.0 P3 -1 근본수정).
+        #    표준 자식은 best-of-3 구성 + ALNS(시드 분산, = v1.0.0 포트폴리오). relax 가능하고
+        #    제한시간이 충분하면 자식 0을 relax-repair로(obj1 전역 스케줄 레버). relax는 None이면
+        #    표준으로 폴백하므로 *순수 추가*다 -- best-of가 무회귀를 보장한다. ir은 COW 상속.
+        #    메인은 자식을 직접 호출하지 않고 수집만 해 hard-bounded.
         # relax 게이트: ortools + 충분한 제한시간 + *혼잡 인스턴스*에만. relax는 obj1(지각)을
         # 깎지만 CP가 obj3(선호)를 무시해 비혼잡(obj3-지배) 인스턴스에선 베이 할당을 망쳐 손해다.
         # utilization(블록 면적·체류 합 / 베이 면적·horizon)이 혼잡도의 물리 측정이라, 이 통계로만
@@ -475,69 +573,14 @@ def algorithm(prob_info, timelimit=60):
         # obj3-지배 util≤0.42 vs obj1-지배 util≥0.42, 0.45가 깨끗한 분리선.
         use_relax = _RELAX_OK and nw >= 2 and tl >= 30.0 and _utilization(prob_info) >= 0.45
         cp_cap = min(tl * 0.15, 20.0)                       # 인스턴스 무관 비율 게이트(과적합 금지)
-        procs, q = [], None
         try:
-            ctx = multiprocessing.get_context("fork")
-            q = ctx.Queue()
-            for i in range(nw):
-                if use_relax and i == 0:
-                    p = ctx.Process(
-                        target=_worker_relax,
-                        args=(q, ir, prob_info, t0, tl, base + i, cp_cap, nw),
-                        daemon=True)
-                else:
-                    p = ctx.Process(
-                        target=_worker_full,
-                        args=(q, ir, prob_info, t0, tl, base + i),
-                        daemon=True)
-                p.start()
-                procs.append(p)
-        except Exception as e:  # fork 불가(seccomp 등) -- 자식 없이 진행
-            print(f"[P4c] {name}: fork FAILED ({e!r}) -- 메인 단독(degraded)", flush=True)
-            for p in procs:
-                try:
-                    p.terminate()
-                except Exception:
-                    pass
-            procs, q = [], None
-
-        if procs:
-            # 메인 = supervisor. return_cap까지 timeout-bounded로 수집만 한다.
-            got = 0
-            while got < len(procs) and time.time() < return_cap:
-                try:
-                    r = q.get(timeout=max(0.01, return_cap - time.time()))
-                except Exception:   # queue.Empty(타임아웃) 등 -- 더 안 기다린다
-                    break
-                got += 1
-                if r is not None:
-                    results.append(r)
-            # 남은 자식 즉시 종료(daemon이라 보장되나 명시적으로). terminate는 비동기라 tail 없음.
-            for p in procs:
-                try:
-                    if p.is_alive():
-                        p.terminate()
-                except Exception:
-                    pass
-            try:
-                q.cancel_join_thread()   # 인터프리터 종료 시 feeder thread join 회피
-            except Exception:
-                pass
-        else:
-            # fork 불가 환경에서만(degraded): 메인에서 구성 하나 + 시드 하나를 best-effort로.
-            # 이 경로만 메인이 무거운 일을 하나, fork가 없으니 달리 방법이 없다. 짧은 제한시간엔
-            # overrun 위험이 있으나 floor가 이미 손에 있어 -1로 가진 않는다(반환 직전 가드).
-            if time.time() < t0 + tl * 0.5:
-                try:
-                    committed, loads, bw = construct(
-                        prob_info, t0, tl, ir=ir, order="edd", cand="scan", return_state=True)
-                    if time.time() < return_cap:
-                        r0 = _improve(ir, prob_info, committed, loads, bw, t0, tl, base,
-                                      verbose=True)
-                        if r0 is not None:
-                            results.append(r0)
-                except Exception as e:
-                    print(f"[P3] {name}: degraded construct FAILED ({e!r})", flush=True)
+            results = _run_forked(ir, prob_info, t0, tl, base, nw,
+                                  use_relax, cp_cap, return_cap)
+        except OSError as e:
+            # os.fork 자체가 불가(seccomp 등 극단 환경)에서만. 메인에서 SIGALRM-bounded 단일
+            # 구성+개선 best-effort -- 알람이 return_cap에 overrun을 거두고, 실패하면 floor.
+            print(f"[P4c] {name}: os.fork FAILED ({e!r}) -- 메인 SIGALRM-bounded", flush=True)
+            results = _in_process_bounded(ir, prob_info, t0, tl, base, return_cap)
     except Exception as e:
         print(f"[P?] {name}: unexpected ({e!r}) -- floor 반환", flush=True)
 

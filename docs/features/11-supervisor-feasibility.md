@@ -1,7 +1,7 @@
 # supervisor 구조: 메인을 감독자로 — 어떤 제한시간에서도 −1을 구조적으로 막는다
 
-- **state**: 측정완료
-- **코드**: `src/myalgorithm.py:algorithm()` (감독자), `src/myalgorithm.py:_worker_full()` (자식 본체)
+- **state**: 측정완료 (v1.1.1에서 fork 메커니즘 정정 — 아래 ★ 참조)
+- **코드**: `src/myalgorithm.py:algorithm()` (감독자), `_run_forked()` (os.fork 수집), `_child_body()`/`_full_body()`/`_relax_body()` (자식 본체), `_in_process_bounded()` (seccomp 폴백)
 - **관련 결정**: STRATEGY_PLAN.md B1(feasibility-first) · P4c(시드 포트폴리오) 위에 얹힘
 - **배경**: LEARNING_GUIDE.md Part F2(시간 관리) · GLOSSARY의 [floor](../GLOSSARY.md)
 - **측정**: `results/v11sup2_2s/` · `results/v11sup2_10s/` · `results/v11sup2_full_60s_j1/`
@@ -14,6 +14,34 @@
 가장 좋은 feasible 결과(없으면 floor)를 반환한다. 자식 하나가 느린 Shapely 호출에 묶이거나 OOM으로
 죽어도 메인의 벽시계는 자식과 무관하게 흐르니, 메인은 항상 제한시간 안에 답을 낸다. 이 구조의 목적은
 한 줄로 줄어든다 — *어떤 제한시간에서도 −1(시간 초과·미반환)을 구조적으로 불가능하게* 만드는 것.
+
+## ★ v1.1.1 정정 — 이 구조가 서버에서 무력했던 이유와 진짜 수정
+
+처음 이 구조를 `multiprocessing.get_context("fork").Process`로 구현했을 때(v1.0.1/v1.1.0), **서버에서는
+단 한 번도 작동하지 않았다.** 평가 서버는 우리 `algorithm()`을 *daemon 프로세스* 안에서 실행하는데,
+daemon 프로세스는 자식을 만들 수 없다(`AssertionError: daemonic processes are not allowed to have children`).
+그래서 `Process.start()`가 예외를 던지고, 코드는 `except`로 떨어져 **메인 단독 degraded 경로**(메인에서
+`construct`를 직접 실행)를 탔다. 그런데 `construct`는 deadline을 무시하고 overrun한다 — 작은 인스턴스에선
+0.6초 꼬리라 10초 제한에 묻혔지만, **큰 인스턴스(900블록 합성)에선 deadline 10초를 무시하고 16.46초까지
+달려** 시간을 초과했다(floor 0.03초·최종 check 0.19초는 빠른데 `construct`만 16.46초). 그 결과 feasible한
+해를 *늦게* 반환 → 서버가 시간 초과로 −1. **v1.0.0(설계상 in-process)과 v1.1.0(fork 실패→in-process)이 둘 다
+숨김 P3에서 −1을 받은 단일 원인이 이것이다.** supervisor는 daemon 서버에서 fork를 못 해 무력했고, 로컬
+게이트가 통과한 건 `batch_runner`가 `subprocess`(non-daemon)로 돌려 fork가 됐기 때문이다 — train≠서버
+*실행환경* 미스매치.
+
+진짜 수정은 **raw `os.fork()`** 다. `multiprocessing`의 daemon-자식 금지는 파이썬 레벨 assertion이지만
+`os.fork()`는 OS 직접호출이라 daemon 프로세스에서도 통과한다(실측 확인). `_run_forked()`가 `os.fork()`로
+`nw`개 자식을 띄우고, 각 자식은 결과를 임시파일에 원자적으로 피클(rename으로 "존재=완전기록" 보장),
+메인은 `return_cap`까지 *종료한* 자식만 비차단(`os.waitpid(WNOHANG`)으로 수집하고 미완은 `SIGKILL`+reap한다.
+이로써 supervisor가 **서버(daemon)에서도 작동** → construct가 종료 가능한 자식에서 돌고 메인은 bounded.
+부수 효과로 **그동안 서버에서 degraded single-seed로 돌던 품질이 풀 포트폴리오로 복원**됐다(daemon
+prob_17 2.69M→108K). `os.fork`마저 막히는 극단(seccomp)에선 `_in_process_bounded()`가 `SIGALRM`으로
+construct overrun을 `return_cap`에 끊고 floor를 반환한다 — 아래 "버린 선택지들"의 SIGALRM 한계(C 호출
+중단 불가)와 달리, 여기서 끊는 대상은 *파이썬 레벨 construct 루프*라 시그널이 바이트코드 경계에서 듣는다.
+
+검증: daemon 모드(서버 조건 재현) 900블록 10초 16.26초→**9.33초 ok**, 전체 40개 daemon 게이트 tl=10초·60초
+모두 **invalid 0·overtime 0**, seccomp 폴백 900블록 9.30초 floor. 아래 본문은 supervisor의 *원리*를 설명하며,
+fork 메커니즘만 `multiprocessing`→`os.fork`로 바뀌었다(감독자·return_cap·floor 폴백 불변).
 
 ## 왜 이 기능이 필요했나
 
@@ -87,11 +115,13 @@ base를 얻어 v1.0.0의 탐색을 그대로 복제한다. *고르지 않은 길
 
 ## 언제·어디서 작동하나
 
-`algorithm()`의 전 경로에서 항상 작동한다. fork가 가능한 정상 환경에선 자식 포트폴리오가 돌고, fork가
-막힌 환경(seccomp 등)에선 `except`로 떨어져 메인이 단독으로 구성 하나 + 시드 하나를 best-effort로 돌리는
-degraded 경로를 탄다(실측: fork 차단 시뮬레이션에서 10초 제한에 8.3·8.7초에 feasible 반환). 메인의 수집
-cap(`return_cap = 0.93×timelimit`)이 단일 시간 경계이고, 그 뒤 best_sol(있으면)·floor 중 하나를 곧바로
-반환한다 — 둘 다 이미 만들어진 feasible dict이라 시간 가드가 더 좋은 best를 floor로 강등하지 않는다.
+`algorithm()`의 전 경로에서 항상 작동한다. `os.fork()`는 daemon·non-daemon 양쪽에서 통과하므로 정상
+환경·서버 모두 자식 포트폴리오가 돈다(이것이 v1.1.1 정정의 핵심). `os.fork()` 자체가 막히는 극단(seccomp)
+에서만 `_in_process_bounded()`로 떨어져 메인이 단독 구성+개선을 SIGALRM으로 hard-bound한다 — construct가
+overrun해도 `return_cap`에 알람이 끊고 floor를 반환한다(실측: os.fork 차단 시뮬레이션 900블록 10초에 9.30초
+floor, overrun 0). 메인의 수집 cap(`return_cap = 0.93×timelimit`)이 단일 시간 경계이고, 그 뒤 best_sol(있으면)·
+floor 중 하나를 곧바로 반환한다 — 둘 다 이미 만들어진 feasible dict이라 시간 가드가 더 좋은 best를 floor로
+강등하지 않는다.
 
 ## 검증과 한계
 
@@ -103,7 +133,9 @@ cap(`return_cap = 0.93×timelimit`)이 단일 시간 경계이고, 그 뒤 best_
 대부분 +0.1~1.3%이고 눈에 띄는 prob_20조차 supervisor 런들에서 149603·156697·163435로 ±5% 출렁이는
 ALNS 벽시계 변동이라, 체계적 퇴보가 아니라 노이즈 범위에 든다. (4) **메모리** — 자식당 RSS ~35MB로 OOM 없음.
 (5) **C1 floor 강건성** — 빈 shape 블록을 주입해도 floor가 throw 없이 모든 블록을 배치하고, `timelimit=0.01s`로
-floor 경로를 강제해도 빈 operations가 아니다. (6) **degraded** — fork 차단 시뮬레이션에서 10초에 feasible 반환.
+floor 경로를 강제해도 빈 operations가 아니다. (6) **degraded** — *이 항목은 v1.1.1에서 정정됨.* 옛 degraded
+(multiprocessing fork 실패→메인 단독 construct)는 train 크기에선 통과했으나 큰 인스턴스에서 overrun해 −1을
+냈다(P3의 원인). 위 ★ v1.1.1 정정의 os.fork·SIGALRM 검증으로 대체한다.
 
 남은 한계: 매우 짧은 제한시간(2초)에서 큰 인스턴스는 자식 구성이 끝나기 전 메인이 `return_cap`에 닿아
 floor를 반환한다 — 품질은 낮아도 feasible이라 −1은 아니다(feasibility-first의 본령). 실제 평가는 게이트
