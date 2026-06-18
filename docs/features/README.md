@@ -32,3 +32,4 @@
 | [11](./11-supervisor-feasibility.md) | supervisor 구조(메인=감독자, −1 구조제거) | 측정완료 | B1·P1·P4c | LEARNING_GUIDE F2 |
 | [12](./12-bay-clear-refill.md) | bay-clear-refill(obj3 국소탐색) | 채택 보류(노이즈) | B5·P5 | LEARNING_GUIDE B5·F1 |
 | [13](./13-floor-scale-hardening.md) | floor 스케일·경계 강건화(스케일 −1 제거) | 측정완료 | B1·P1 | LEARNING_GUIDE F2 |
+| [14](./14-relax-repair.md) | relax-and-repair(CP 코어 스케줄→nesting repair, obj1 천장) | 측정완료 | B3·B5·P5 | LEARNING_GUIDE F1 |
