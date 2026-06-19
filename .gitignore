@@ -51,3 +51,5 @@ results/
 
 # humanize-korean plugin scratch
 _workspace/
+gurobi.lic
+*.lic
