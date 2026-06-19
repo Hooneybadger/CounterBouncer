@@ -62,6 +62,19 @@ except Exception:
     def relax_repair(*a, **k):  # 폴백 스텁
         return None
 
+# obj3(선호) 할당 마스터(B3 외층). gurobi 미가용 시 안전하게 비활성(표준 폴백). obj3-지배
+# 인스턴스 전용(util<0.45). 평가 서버엔 후원사 gurobi 라이선스, 로컬엔 academic.
+try:
+    try:
+        from obj3_assign import obj3_assign_repair, gurobi_available
+    except ImportError:
+        from ogc2026.src.obj3_assign import obj3_assign_repair, gurobi_available
+    _OBJ3_OK = gurobi_available()
+except Exception:
+    _OBJ3_OK = False
+    def obj3_assign_repair(*a, **k):  # 폴백 스텁
+        return None
+
 
 # -----------------------------------------------------------------------------
 # 기하 헬퍼
@@ -347,17 +360,30 @@ def _relax_body(ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
     return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
 
 
-def _child_body(i, ir, prob_info, t0, tl, base, use_relax, cp_cap, nw):
-    """자식 i가 실행할 본체. 자식 0이 relax 가능하면 relax, 아니면 표준. 예외엔 None."""
+def _obj3_body(ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
+    """obj3 워커: gurobi 선호-최소 할당 → 래스터 repair base 위에서 _improve. 할당 실패 시 표준
+    폴백 -- obj3 자식도 *순수 추가*(best-of가 무회귀 보장). obj3-지배(저혼잡) 인스턴스 전용."""
+    rr = obj3_assign_repair(ir, prob_info, t0, timelimit, time_cap=cp_cap, threads=cp_workers)
+    if rr is None:
+        return _full_body(ir, prob_info, t0, timelimit, seed)
+    committed, loads, bw = rr
+    return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+
+
+def _child_body(i, ir, prob_info, t0, tl, base, special, cp_cap, nw):
+    """자식 i가 실행할 본체. 자식 0이 special('relax'/'obj3')이면 그 전용 base, 아니면 표준.
+    relax(obj1-지배)·obj3(obj3-지배)는 상호배타(인스턴스 통계로 게이트). 예외엔 None."""
     try:
-        if use_relax and i == 0:
+        if i == 0 and special == "relax":
             return _relax_body(ir, prob_info, t0, tl, base + i, cp_cap, nw)
+        if i == 0 and special == "obj3":
+            return _obj3_body(ir, prob_info, t0, tl, base + i, cp_cap, nw)
         return _full_body(ir, prob_info, t0, tl, base + i)
     except Exception:
         return None
 
 
-def _run_forked(ir, prob_info, t0, tl, base, nw, use_relax, cp_cap, return_cap):
+def _run_forked(ir, prob_info, t0, tl, base, nw, special, cp_cap, return_cap):
     """raw os.fork() supervisor -- nw 자식을 띄워 결과를 임시파일로 수집. ★서버(daemon 프로세스)
     에서도 동작한다: multiprocessing.Process는 'daemonic processes are not allowed to have
     children'으로 막히지만 os.fork()는 OS 직접호출이라 통과한다(v1.1.0 P3 -1의 근본 수정 --
@@ -377,7 +403,7 @@ def _run_forked(ir, prob_info, t0, tl, base, nw, use_relax, cp_cap, return_cap):
                 # ---- CHILD ---- COW 상속. 결과만 임시파일에. 파이썬 정리 건너뛰어(os._exit)
                 # 부모 상태(열린 fd·락) 오염 방지.
                 try:
-                    r = _child_body(i, ir, prob_info, t0, tl, base, use_relax, cp_cap, nw)
+                    r = _child_body(i, ir, prob_info, t0, tl, base, special, cp_cap, nw)
                     if r is not None:
                         with open(path + ".tmp", "wb") as f:
                             pickle.dump(r, f)
@@ -572,12 +598,20 @@ def algorithm(prob_info, timelimit=60):
         # utilization(블록 면적·체류 합 / 베이 면적·horizon)이 혼잡도의 물리 측정이라, 이 통계로만
         # 게이트한다(인스턴스 번호가 아니라 어떤 인스턴스에도 계산되는 양 -- 과적합 금지). 측정:
         # obj3-지배 util≤0.42 vs obj1-지배 util≥0.42, 0.45가 깨끗한 분리선.
-        use_relax = (_RELAX_OK and nw >= 2 and tl >= 30.0 and _utilization(prob_info) >= 0.45
-                     and not os.environ.get("OGC_NO_RELAX"))   # 실험 노브(기본 빈값=relax ON)
+        # 자식 0에 special base를 줄지: 혼잡(obj1-지배)이면 relax, 비혼잡(obj3-지배)이면 obj3.
+        # 둘은 상호배타 -- utilization으로 가른다(인스턴스 통계라 과적합 아님, 0.45 분리선).
+        util = _utilization(prob_info)
+        special = None
+        if nw >= 2 and tl >= 30.0 and not os.environ.get("OGC_NO_SPECIAL"):
+            if _RELAX_OK and util >= 0.45 and not os.environ.get("OGC_NO_RELAX"):
+                special = "relax"   # obj1(지각) 전역 스케줄 레버(CP 코어 → nesting repair)
+            elif _OBJ3_OK and util < 0.45 and os.environ.get("OGC_USE_OBJ3"):
+                special = "obj3"    # ★측정상 기각(net 중립~음, prob_20 +5%): realize가 obj3를
+                #                     폴백서 흘리고 시드 대체 손해. 기본 OFF, opt-in으로만(실험·참조).
         cp_cap = min(tl * 0.15, 20.0)                       # 인스턴스 무관 비율 게이트(과적합 금지)
         try:
             results = _run_forked(ir, prob_info, t0, tl, base, nw,
-                                  use_relax, cp_cap, return_cap)
+                                  special, cp_cap, return_cap)
         except OSError as e:
             # os.fork 자체가 불가(seccomp 등 극단 환경)에서만. 메인에서 SIGALRM-bounded 단일
             # 구성+개선 best-effort -- 알람이 return_cap에 overrun을 거두고, 실패하면 floor.
