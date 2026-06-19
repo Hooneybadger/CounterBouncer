@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 
 try:  # flat layout
@@ -91,7 +92,31 @@ def destroy_window(committed, bay_loads, blocks_data, rng, k):
     return _remove(committed, bay_loads, blocks_data, recs[:min(k, len(recs))])
 
 
-DESTROY_OPS = (destroy_random, destroy_worst, destroy_window)
+def destroy_tardy_window(committed, bay_loads, blocks_data, rng, k):
+    """지각 큰 블록을 앵커로 그 시간대 묶음을 제거 -- B3의 EXIT-지연/congestion 재분배 연산자.
+
+    destroy_worst는 지각 블록만 빼서 repair가 *같은 늦은 슬롯*에 도로 넣기 쉽다(앞을 막는
+    blocker가 그대로라). destroy_window는 무작위 앵커라 지각과 무관할 수 있다. 이 연산자는
+    지각 블록 주변(그 앞을 막는 비-지각 blocker 포함) 시간대를 통째로 걷어, repair(EDD=납기
+    이른 순=지각 우선)가 지각 블록을 더 이른 슬롯에 넣고 blocker는 자기 슬랙 안에서 뒤로
+    밀리게 한다. 지각이 슬랙으로 재분배될 때만 obj가 줄고, SA 수락이라 무회귀다."""
+    recs = _all_records(committed)
+    if not recs:
+        return []
+    by_tard = sorted(recs, key=lambda br: max(0, br[1]["exit"]
+                     - blocks_data[br[1]["bid"]]["due_date"]), reverse=True)
+    if max(0, by_tard[0][1]["exit"] - blocks_data[by_tard[0][1]["bid"]]["due_date"]) == 0:
+        return destroy_window(committed, bay_loads, blocks_data, rng, k)  # 지각 없으면 일반 윈도우
+    _, anchor = rng.choice(by_tard[:max(1, min(len(by_tard), k))])  # 지각 상위 풀서 앵커
+    center = anchor["entry"]
+    recs.sort(key=lambda br: abs(br[1]["entry"] - center))
+    return _remove(committed, bay_loads, blocks_data, recs[:min(k, len(recs))])
+
+
+_BASE_DESTROY = (destroy_random, destroy_worst, destroy_window)
+# A4 tardy-window: 측정상 효과가 ALNS 런-간 분산(±3~10%) 아래라 검증 불가 → 기본 OFF(opt-in).
+DESTROY_OPS = (_BASE_DESTROY + (destroy_tardy_window,) if os.environ.get("OGC_USE_TARDY_WINDOW")
+               else _BASE_DESTROY)
 
 
 # -----------------------------------------------------------------------------
@@ -142,10 +167,26 @@ def alns(prob_info, ir, committed, bay_loads, bay_weights, deadline, rng,
     kmin = max(1, n // 50)
     kmax = max(kmin + 1, n // 15)
 
+    # 적응적 연산자 선택(교과서 ALNS의 'A'): 균일 무작위 대신 최근 성공으로 가중한 roulette.
+    # 한 연산자가 어떤 인스턴스서 안 먹히면 가중이 내려가 시간 낭비를 줄이고, 잘 먹히면 올라가
+    # 그 인스턴스에 특화된 탐색을 한다 -- A4(tardy-window)가 균일에선 wash(2승2패)였으나, 적응이면
+    # 도움 되는 곳만 쓰여 손실을 줄인다. OGC_NO_ADAPTIVE로 끄면 기존 균일(측정 비교용).
+    nops = len(DESTROY_OPS)
+    adaptive = bool(os.environ.get("OGC_USE_ADAPTIVE"))   # 측정상 노이즈 아래 → 기본 OFF(opt-in)
+    w_op = [1.0] * nops; s_op = [0.0] * nops; c_op = [0] * nops
+    SIG_BEST, SIG_ACC = 3.0, 1.0; DECAY = 0.8   # 새 best/수락 보상, 반응계수
+
     iters = accepts = improves = 0
     while time.time() < deadline:
         k = rng.randint(kmin, kmax)
-        op = rng.choice(DESTROY_OPS)
+        if adaptive:
+            r = rng.random() * sum(w_op); oi = nops - 1
+            for j in range(nops):
+                r -= w_op[j]
+                if r <= 0: oi = j; break
+        else:
+            oi = rng.randrange(nops)
+        op = DESTROY_OPS[oi]; c_op[oi] += 1
         saved = op(committed, bay_loads, blocks_data, rng, k)
         if not saved:
             break
@@ -162,11 +203,19 @@ def alns(prob_info, ir, committed, bay_loads, bay_weights, deadline, rng,
                 best = new
                 best_snap = [list(bay) for bay in committed]
                 improves += 1
+                s_op[oi] += SIG_BEST
                 if stats is not None and "curve" in stats:
                     stats["curve"].append((round(time.time() - t_start, 2), best))
+            else:
+                s_op[oi] += SIG_ACC
         else:
             _undo(committed, bay_loads, blocks_data, added, saved)
         iters += 1
+        if adaptive and iters % 64 == 0:            # 세그먼트마다 가중 갱신
+            for j in range(nops):
+                if c_op[j]:
+                    w_op[j] = max(0.05, (1 - DECAY) * w_op[j] + DECAY * (s_op[j] / c_op[j]))
+                s_op[j] = 0.0; c_op[j] = 0
 
     if stats is not None:
         stats.update(iters=iters, accepts=accepts, improves=improves)
