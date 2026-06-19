@@ -339,7 +339,8 @@ def _full_body(ir, prob_info, t0, timelimit, seed):
 def _relax_body(ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
     """relax-repair 워커: CP 코어 스케줄 → 크레인-repair base 위에서 _improve. relax_repair가
     None이면(ortools無·CP실패) 표준 구성으로 폴백 -- relax는 *순수 추가*(best-of가 무회귀 보장)."""
-    rr = relax_repair(ir, prob_info, t0, timelimit, cp_cap=cp_cap, workers=cp_workers)
+    cpw = int(os.environ.get("OGC_CP_WORKERS", "0") or "0") or cp_workers  # 실험 노브(기본 0=nw)
+    rr = relax_repair(ir, prob_info, t0, timelimit, cp_cap=cp_cap, workers=cpw)
     if rr is None:
         return _full_body(ir, prob_info, t0, timelimit, seed)
     committed, loads, bw = rr
@@ -549,7 +550,7 @@ def algorithm(prob_info, timelimit=60):
         floor = {"operations": {}}
 
     run_idx = int(os.environ.get("OGC_RUN_INDEX", "0") or "0")
-    nw = _n_workers()
+    nw = int(os.environ.get("OGC_NW", "0") or "0") or _n_workers()  # 실험 노브(기본 0=자동 4)
     base = _BASE_SEED + 100 * run_idx
     results = []
 
@@ -571,7 +572,8 @@ def algorithm(prob_info, timelimit=60):
         # utilization(블록 면적·체류 합 / 베이 면적·horizon)이 혼잡도의 물리 측정이라, 이 통계로만
         # 게이트한다(인스턴스 번호가 아니라 어떤 인스턴스에도 계산되는 양 -- 과적합 금지). 측정:
         # obj3-지배 util≤0.42 vs obj1-지배 util≥0.42, 0.45가 깨끗한 분리선.
-        use_relax = _RELAX_OK and nw >= 2 and tl >= 30.0 and _utilization(prob_info) >= 0.45
+        use_relax = (_RELAX_OK and nw >= 2 and tl >= 30.0 and _utilization(prob_info) >= 0.45
+                     and not os.environ.get("OGC_NO_RELAX"))   # 실험 노브(기본 빈값=relax ON)
         cp_cap = min(tl * 0.15, 20.0)                       # 인스턴스 무관 비율 게이트(과적합 금지)
         try:
             results = _run_forked(ir, prob_info, t0, tl, base, nw,
