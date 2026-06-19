@@ -157,7 +157,11 @@ def _guaranteed_place(blk_data: dict, bays: list, sorted_sched: list):
     반환: (bay_id, orient_idx, x, y, entry, exit_t)
     """
     r_time = int(blk_data["release_time"])
-    proc   = int(blk_data["processing_time"])
+    # proc=0이면 entry==exit가 돼 _build_operations가 같은 시각 EXIT를 ENTRY보다 앞에 놓고
+    # (Stage5: "EXIT before present") floor가 검증 없이 −1을 낸다. train 최소 proc=3이라 안
+    # 나타나지만, 숨김 인스턴스가 proc=0을 주면 보이지 않는 −1이다. max(1,·)로 1단위 점유시켜
+    # 표현 가능하게 만든다 -- proc≥1엔 무영향(no-op), 윈도우·exit·bay_tail이 같은 proc로 일관.
+    proc   = max(1, int(blk_data["processing_time"]))
     n_bays = len(bays)
     prefs  = blk_data.get("bay_preferences", [0.0] * n_bays)
     n_orient = len(blk_data["shape"])
@@ -200,6 +204,49 @@ def _guaranteed_place(blk_data: dict, bays: list, sorted_sched: list):
     return bay_id, oi, px, py, entry, entry + proc
 
 
+def _safe_finish_place(blk_data: dict, bays: list, bay_tail: list):
+    """시간이 모자라거나(fast-finish) 정상 배치가 터졌을 때의 '값싸지만 *feasible*한' 직렬 배치.
+
+    ★ 이것이 P3 −1의 근본 수정이다. 옛 fast-finish/예외 경로는 블록을 (px,py)=(0,0)·orient 0에
+    고정 배치했는데, 학습·숨김 인스턴스의 블록 대다수는 회전 다각형이라 *로컬 min-corner가 음수*다
+    (train 측정: 54264/57560 정점이 음수 min). (0,0)에 놓으면 월드 min<0 → 베이 경계 밖 →
+    검증기 Stage2/4 경계 위반 → infeasible. 로컬 게이트는 throttle 없는 non-daemon이라 fast-finish가
+    안 걸려 이 −1을 한 번도 못 봤다(서버는 400% throttle + 큰 인스턴스 + 짧은 제한시간에서 floor가
+    deadline을 넘겨 fast-finish→(0,0)→−1). 측정: fast-finish 강제 시 train 12/12 infeasible.
+
+    그래서 (0,0) 대신 `_origin_fit`으로 *실제로 베이에 드는* 방향·위치(px=ceil(-min_x)≥0 시프트)를
+    찾는다. entry는 베이 tail(그 베이 마지막 exit) 이후라 빈-베이 윈도우 → 무충돌·크레인 자유가
+    자명. 가장 빨리 비는 베이부터 보고, 드는 첫 (베이,방향)을 쓴다. 베이별 O(orient)뿐(스케줄
+    스캔이 없어 정상 경로보다도 싸다 -- fast-finish의 속도 목적을 지키면서 feasibility를 회복).
+    반환: (bay_id, oi, px, py, entry, exit_t), 전부 검증기와 일치하는 feasible 값.
+    """
+    r_time = int(blk_data.get("release_time", 0) or 0)
+    proc = max(1, int(blk_data.get("processing_time", 0) or 0))  # proc=0 봉인(위 _guaranteed_place 주석)
+    n_orient = len(blk_data["shape"])
+    for bay_id in sorted(range(len(bays)), key=lambda j: max(bay_tail[j], r_time)):
+        bay = bays[bay_id]
+        for oi in range(n_orient):
+            fit = _origin_fit(blk_data, oi, bay)   # 정수격자 경계검사 = 검증기와 동일
+            if fit is not None:
+                entry = max(bay_tail[bay_id], r_time)
+                return bay_id, oi, fit[0], fit[1], entry, entry + proc
+    # 어느 (베이,방향)에도 정수 격자에서 안 듦 = 블록이 본질적으로 배치 불가(인스턴스 infeasible).
+    # 그래도 −1을 줄이는 최선으로 *경계 초과가 가장 작은* 배치를 고른다(초과 0이면 실제 feasible).
+    best_ov = None
+    for bay_id, bay in enumerate(bays):
+        for oi in range(n_orient):
+            bb = _block_bbox(blk_data, oi)
+            px = max(0, math.ceil(-bb[0]))
+            py = max(0, math.ceil(-bb[1]))
+            ov = (max(0.0, px + bb[2] - bay.width)
+                  + max(0.0, py + bb[3] - bay.height))
+            if best_ov is None or ov < best_ov[0]:
+                best_ov = (ov, bay_id, oi, px, py)
+    _, bay_id, oi, px, py = best_ov
+    entry = max(bay_tail[bay_id], r_time)
+    return bay_id, oi, px, py, entry, entry + proc
+
+
 def _guaranteed_solution(prob_info: dict, deadline: float | None = None) -> dict:
     """모든 블록을 빈-베이 윈도우로 직렬 배치한 feasible 해.
 
@@ -239,26 +286,32 @@ def _guaranteed_solution(prob_info: dict, deadline: float | None = None) -> dict
                 and idx % check_every == 0 and time.time() > deadline):
             fast_finish = True      # 시간 부족 -- 남은 블록은 아래 단순 경로로 즉시 마감
         if fast_finish:
-            # 가장 빨리 비는 베이(가장 작은 tail)에 release 이후 직렬로. O(베이).
-            r_time = int(blk_data.get("release_time", 0) or 0)
-            proc = int(blk_data.get("processing_time", 0) or 0)
-            bay_id = min(range(len(bays)), key=lambda j: max(bay_tail[j], r_time))
-            entry = max(bay_tail[bay_id], r_time)
-            oi, px, py, exit_t = 0, 0, 0, entry + proc
+            # 빈-베이 윈도우에 *드는 위치로* 직렬 배치(0,0 고정이 아니라 -- 그게 −1의 원인이었다).
+            try:
+                bay_id, oi, px, py, entry, exit_t = _safe_finish_place(blk_data, bays, bay_tail)
+            except Exception:
+                # 기하조차 못 읽는 극단 블록(shape 누락 등) -- 최후의 자명 배치.
+                r_time = int(blk_data.get("release_time", 0) or 0)
+                proc = max(1, int(blk_data.get("processing_time", 0) or 0))
+                bay_id = min(range(len(bays)), key=lambda j: max(bay_tail[j], r_time))
+                entry = max(bay_tail[bay_id], r_time)
+                oi, px, py, exit_t = 0, 0, 0, entry + proc
             bay_tail[bay_id] = exit_t
             assignments.append(_assignment(bi, bay_id, px, py, oi, entry, exit_t))
             continue
         try:
             bay_id, oi, px, py, entry, exit_t = _guaranteed_place(blk_data, bays, bay_schedule)
         except Exception:
-            # 망가진 블록: 베이 0, orient 0, 원점, release~release+proc의 자명 배치.
-            r_time = int(blk_data.get("release_time", 0) or 0)
-            proc = int(blk_data.get("processing_time", 0) or 0)
+            # 정상 배치 실패 -- (0,0) 자명배치는 음수 min-corner 블록서 경계위반(infeasible)이라
+            # *드는 위치로* 떨어뜨린다(tail 이후 빈-베이 윈도우). _safe_finish_place가 feasible 보장.
             try:
-                entry = _empty_bay_entry_fast(bay_schedule[0], r_time, proc)
+                bay_id, oi, px, py, entry, exit_t = _safe_finish_place(blk_data, bays, bay_tail)
             except Exception:
-                entry = r_time
-            bay_id, oi, px, py, exit_t = 0, 0, 0, 0, entry + proc
+                r_time = int(blk_data.get("release_time", 0) or 0)
+                proc = max(1, int(blk_data.get("processing_time", 0) or 0))
+                bay_id = min(range(len(bays)), key=lambda j: max(bay_tail[j], r_time))
+                entry = max(bay_tail[bay_id], r_time)
+                oi, px, py, exit_t = 0, 0, 0, entry + proc
         bisect.insort(bay_schedule[bay_id], (entry, exit_t))  # 정렬 유지
         if exit_t > bay_tail[bay_id]:
             bay_tail[bay_id] = exit_t
