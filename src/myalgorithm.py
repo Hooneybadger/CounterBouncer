@@ -658,9 +658,12 @@ def algorithm(prob_info, timelimit=60):
         if nw >= 2 and tl >= 30.0 and not os.environ.get("OGC_NO_SPECIAL"):
             if _RELAX_OK and util >= 0.45 and not os.environ.get("OGC_NO_RELAX"):
                 special = "relax"   # obj1(지각) 전역 스케줄 레버(CP 코어 → nesting repair)
-            elif _OBJ3_OK and util < 0.45 and os.environ.get("OGC_USE_OBJ3"):
-                special = "obj3"    # ★측정상 기각(net 중립~음, prob_20 +5%): realize가 obj3를
-                #                     폴백서 흘리고 시드 대체 손해. 기본 OFF, opt-in으로만(실험·참조).
+            elif _OBJ3_OK and util < 0.25 and os.environ.get("OGC_USE_OBJ3"):
+                special = "obj3"    # ★기본 OFF 유지(v1.3.0 순위시뮬 재기각). 게이트는 0.45→0.25로
+                #   좁혀 뒀으나(향후 참조), tl=60 best-of-4서 obj3 ON vs OFF 순위 76:75(노이즈,
+                #   회귀는 obj3-OFF util>0.25 인스턴스=무관). 진짜효과 prob_10/15 −5%뿐·노이즈바닥.
+                #   원인: tl≥30(발화조건)이면 표준 pref_polish가 이미 obj3 수렴 → obj3-assign 이점
+                #   증발. de-risk(tl=15 단일시드)가 v1을 과소평가한 아티팩트. opt-in으로만 둔다.
         cp_cap = min(tl * 0.15, 20.0)                       # 인스턴스 무관 비율 게이트(과적합 금지)
         try:
             results = _run_forked(ir, prob_info, t0, tl, base, nw,

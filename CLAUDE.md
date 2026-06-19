@@ -91,10 +91,19 @@ GUI 디버깅: `cd alg_tester && python alg_tester_app.py`.
 
 템플릿과 색인은 `docs/features/README.md`와 `docs/features/_TEMPLATE.md`에 있다.
 
-### 5.3 변경 완료의 정의 (Definition of Done)
+### 5.3 ★ 구현 전 선행 조사 — 바퀴를 다시 깎지 않는다
+
+> **의미 있는 기법을 구현하기 전에, 그 기법의 논문 저자 코드·성숙한 라이브러리·오픈소스가 이미 있는지 먼저 찾는다. 없음을 확인하고서야 직접 짠다.**
+
+SOTA 논문을 읽어 알고리즘을 *이해*하는 것과 그것을 *맞게 구현*하는 것은 다르다. 논문은 핵심 아이디어를 주지만 수치 엣지케이스·퇴화 입력 처리·기본 파라미터·자료구조 선택·수렴 트릭처럼 *구현에서만 드러나는 점*을 대개 생략한다. 그걸 우리가 처음부터 다시 더듬으면 시간을 잃고 미묘한 버그를 들인다. 그래서 어떤 비자명한 기법(NFP·CP 모델·패킹 휴리스틱·메타휴리스틱 등)을 착수하기 전에 순서대로 본다: (1) **논문 저자/대회의 공개 코드**, (2) **성숙한 라이브러리**(ortools의 글로벌 제약, shapely의 기하, scipy 등), (3) **검증된 오픈소스 구현**. 찾으면 *재사용하거나, 최소한 우리 구현을 그 정전(canonical) 구현과 대조해* 놓친 점을 잡는다.
+
+단, 이 저장소만의 제약이 있다: 제출물은 `src/`를 zip 루트로 묶은 flat 패키지(≤15MB)이고 평가 서버에서 돈다. 재사용 후보의 가용 범위는 조직위 FAQ로 넓다(§6 "외부 언어·패키지 허용" 참조) — (1) 평가 환경에 이미 있는 것(ortools·gurobi·xpress·shapely·numpy·numba·cython·torch 등), (2) **zip에 동봉한 파이썬 패키지**(같은 폴더·상대 import), (3) **다른 언어(C++·Rust·Java)로 빌드한 정적 바이너리 + subprocess 호출**. 진짜 제약은 *언어*가 아니라 **서버서 재컴파일·의존성 오류 없이 그대로 도는가 + 15MB**다. 그래서 jagua-rs/sparrow(Rust) 같은 SOTA 엔진도 정전 참조일 뿐 아니라 정적 바이너리로 *실제 탑재 후보*가 된다(서버 OS/아키텍처 호환을 제출 전 확인 못 하니 정적 링크로 리스크 제거 + 실패 시 floor 폴백). 그러니 선행 조사는 "무엇이 SOTA인가"와 "그중 무엇이 *우리 환경에서 실제로 돌아가는가*(벤더링·바이너리 포함)"를 함께 본다. 조사 결과(찾은 구현·왜 채택/기각했는지, 또는 *없어서* 직접 짰다는 사실)는 해당 `docs/features/` 문서의 '어떻게(How)'·'다른 선택지(Alternatives)'에 적는다 — 그 자체가 보고서의 근거가 된다.
+
+### 5.4 변경 완료의 정의 (Definition of Done)
 
 하나의 변경은 다음을 모두 만족해야 "완료"다.
 
+0. **선행 조사를 했다**(§5.3) — 성숙한 구현이 있으면 재사용·대조했고, 없으면 없음을 확인했다.
 1. `python batch_runner.py run` 으로 측정했다.
 2. `python batch_runner.py compare` 로 기준런 대비 **회귀 0**(feasible→infeasible 퇴보 0건)을 확인했다.
 3. 해당 `docs/features/` 문서를 신설·갱신했고, 육하원칙이 글에 들어 있다.
@@ -115,6 +124,7 @@ GUI 디버깅: `cd alg_tester && python alg_tester_app.py`.
 - **★ 제출 피드백은 점수·순위를 주지 않는다 — feasibility 수와 목적값만.** 따라서 *우리 순위는 영영 알 수 없고*, 채점(인스턴스별 R−nb)이 목적값에 단조(낮은 obj = 낮은 순위, 타팀 고정 시)이므로 **우리 목적값 최소화가 유일한 신호**다. 결정은 "피드백으로 순위 파악"을 기다릴 수 없다 — train 목적값 측정이 의사결정 기준이고(과적합 금지 하에), 제출 피드백은 *hidden feasibility·스케일 확인*과 *우리 obj가 실제로 내려갔는지* 검증에만 쓴다.
 - **★ 서버 실행환경(이번에 확정).** 평가 서버는 `algorithm()`을 **daemon 프로세스**에서 실행한다 → `multiprocessing.Process`는 'daemonic processes can't have children'으로 막힌다. 자식 병렬은 **raw `os.fork()`**로만 된다(features/11, v1.1.1 P3 −1 근본수정). CPU는 **firejail+cpulimit 400% throttling**(코어 보이나 총량 4, 초과 시 종료 아니라 *느려질 뿐*) — `worker=4` 권장, oversubscription은 CP-SAT를 굶긴다(nw=5가 prob_38 +11.6%). multiprocessing·멀티스레드는 4코어 내 허용. **로컬 서버 모사는 반드시 `systemd-run --user --scope -p CPUQuota=400%` + 1개씩**(동시 실행은 N배 oversubscription 아티팩트, `learning/THROTTLE_MEASUREMENT.md`).
 - **제출 형식.** `src/myalgorithm.py`가 zip 루트, 함수 시그니처 `algorithm(prob_info, timelimit)` 고정, zip ≤ 15MB, 좌표·시각은 정수 출력, 같은 시점에선 EXIT가 ENTRY보다 앞. `utils.py`는 서버 것으로 덮어써지므로 수정 의존 금지. (`submit.py`가 일부를 자동 검증한다.)
+- **★ 외부 언어·패키지 허용(조직위 FAQ 확정).** 두 가지가 열려 있다. (1) **다른 언어(C++·Rust·Java 등)로 만든 라이브러리/실행파일을 zip에 넣고 `myalgorithm.py`에서 `subprocess` 등으로 호출**할 수 있다 — 단 평가 서버에서 **추가 컴파일·의존성 오류 없이 그대로 실행**돼야 한다(정적 링크·자기완결 바이너리, 서버에 없는 동적 라이브러리 의존 금지). (2) **환경에 없는 파이썬 패키지**도 **모든 의존성을 zip에 동봉**하면 쓸 수 있다 — `myalgorithm.py`와 같은 폴더에 두고 상대 경로로 import, zip 전체 ≤ 15MB. ⇒ §5.3의 "이식 가능"은 *순수 파이썬*에 한정되지 않는다: **사전 컴파일 바이너리(어느 언어든) + subprocess**, **벤더링한 파이썬 패키지** 모두 후보다. 제약은 언어가 아니라 *재컴파일·의존성 없이 서버서 도는가* + *15MB*. 따라서 jagua-rs/sparrow(Rust) 같은 SOTA 엔진도 정적 바이너리로 빌드해 호출 가능 — ★단 (a) 서버 OS/아키텍처(glibc 버전 등) 호환을 *제출 전 확인 불가*하니 정적 링크로 리스크를 없애고, (b) subprocess 호출 비용·`os.fork()` 감독자 구조(위 "서버 실행환경" 항목)와의 정합을 측정으로 검증한 뒤에만 채택한다(feasibility-first: 바이너리 실패 시 floor로 폴백).
 
 ---
 
