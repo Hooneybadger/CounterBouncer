@@ -60,6 +60,89 @@ def _check_floor(prob_info: dict, deadline):
     return res["feasible"], res["stage"], allint, viol
 
 
+def _complete(prob_info: dict, sol: dict) -> bool:
+    """모든 블록이 정확히 한 번 ENTRY로 배치됐는지(Stage1 완전성). floor는 비상시에도 *모든*
+    블록에 완전한 operations를 내야 한다 -- 빈/누락은 곧 infeasible이다."""
+    ids = [op["block_id"] for ops in sol.get("operations", {}).values()
+           for op in ops if op.get("type") == "ENTRY"]
+    return sorted(ids) == list(range(len(prob_info["blocks"])))
+
+
+def _reanchor(prob_info: dict, shift):
+    """블록의 모든 방향·층 정점에 (dx,dy)를 더해 reference point(첫 층 첫 정점)를 (0,0)에서
+    옮긴다. shift(block_idx)->(dx,dy). 형상(상대 기하)은 그대로라 검증기가 ref로 재정렬하면 월드
+    배치가 동일 → 인스턴스는 *여전히 feasible*. 하지만 ref≠(0,0)이 되어, ref 보정을 빠뜨린 floor는
+    블록을 경계 밖에 놓는다(features/15의 −1 재현). train 57560개 방향은 전부 ref=(0,0)이라 이
+    구조를 못 만들어내므로, 이 합성이 사각을 메운다."""
+    pi = copy.deepcopy(prob_info)
+    for i, b in enumerate(pi["blocks"]):
+        dx, dy = shift(i)
+        if dx == 0 and dy == 0:
+            continue
+        for orient in b["shape"]:
+            orient["layers"] = [[[x + dx, y + dy] for x, y in layer]
+                                for layer in orient["layers"]]
+    return pi
+
+
+def _check_ref_nonzero(files):
+    """ref≠(0,0) 합성: 블록을 재정렬해도 floor가 feasible+정수여야 한다(normal & fast-finish).
+    이것이 숨김 P3 −1의 직접 재현 테스트다 -- old floor는 여기서 전부 INFEASIBLE."""
+    # 인덱스에 따라 다른 shift를 줘 ref가 블록마다 다르게 한다(균일 shift보다 빡세다).
+    patterns = [
+        ("all+(7,3)",      lambda i: (7, 3)),
+        ("all+(250,250)",  lambda i: (250, 250)),
+        ("varied",         lambda i: (11 + (i % 13), 5 + (i % 7))),
+    ]
+    failures = []
+    # 작은 것 몇 + 큰 것 몇으로 표본(전체는 느리다). 크기순 정렬돼 있으니 양끝을 본다.
+    sample = files[:4] + files[len(files) // 2: len(files) // 2 + 1] + files[-3:]
+    for f in sample:
+        pi = json.load(open(f))
+        name = os.path.basename(f)
+        for pname, shift in patterns:
+            pim = _reanchor(pi, shift)
+            nf, ns, nint, nv = _check_floor(pim, None)
+            ff, fs, fint, fv = _check_floor(pim, time.time() - 100.0)
+            ok = nf and ff and nint and fint
+            tag = "OK" if ok else "FAIL"
+            print(f"  {name:13} ref[{pname:14}] normal={'OK' if nf else f'INFEAS(S{ns})'} "
+                  f"fast={'OK' if ff else f'INFEAS(S{fs})'} int={nint and fint} -> {tag}")
+            if not ok:
+                failures.append((f"{name} ref[{pname}]",
+                                 f"normal_S{ns} {nv}", f"fast_S{fs} {fv}"))
+    return failures
+
+
+def _check_malformed(files):
+    """퇴화·악성 형상: floor가 *crash 없이* 모든 블록에 완전한 정수 operations를 내야 한다(읽히는
+    블록엔 (0,0) 금지). feasibility는 강제하지 않는다 -- shape가 비면 본질적으로 배치 불가일 수 있어
+    그 자체로 infeasible이 정상이다. 여기서 막는 건 *crash·미완·비정수*다."""
+    base = json.load(open(files[0]))
+    cases = {}
+    c = copy.deepcopy(base); c["blocks"][0].pop("shape", None);                 cases["block0 no-shape"] = c
+    c = copy.deepcopy(base); c["blocks"][0]["shape"] = [];                      cases["block0 empty-shape"] = c
+    c = copy.deepcopy(base); c["blocks"][0]["shape"][0]["layers"] = [];         cases["block0 empty-layers"] = c
+    c = copy.deepcopy(base); c["blocks"][0]["shape"][0]["layers"] = [[]];       cases["block0 empty-polygon"] = c
+    c = copy.deepcopy(base); c["blocks"][0].pop("processing_time", None);       cases["block0 no-proc"] = c
+    c = copy.deepcopy(base); c["blocks"][0].pop("release_time", None);          cases["block0 no-release"] = c
+    failures = []
+    for label, pi in cases.items():
+        for mode, dl in (("normal", None), ("fast-finish", time.time() - 100.0)):
+            try:
+                sol = M._guaranteed_solution(pi, deadline=dl)
+            except Exception as e:           # crash = 곧 빈 floor = −1. 절대 허용 안 함.
+                print(f"  {label:22} {mode:11} -> CRASH {e!r}")
+                failures.append((f"{label} ({mode})", "CRASH", repr(e)))
+                continue
+            done, allint = _complete(pi, sol), _all_integer(sol)
+            ok = done and allint
+            print(f"  {label:22} {mode:11} complete={done} int={allint} -> {'OK' if ok else 'FAIL'}")
+            if not ok:
+                failures.append((f"{label} ({mode})", f"complete={done}", f"int={allint}"))
+    return failures
+
+
 def main() -> int:
     files = sorted(glob.glob(os.path.join(_REPO, "train", "*.json")),
                    key=lambda p: int(p.split("_")[-1].split(".")[0]))
@@ -93,14 +176,23 @@ def main() -> int:
     if not zok:
         failures.append(("proc==0 synthetic", f"normal_S{z_ns} {z_nv}", f"fast_S{z_fs} {z_fv}"))
 
+    # ref≠(0,0) 합성: 숨김 P3 −1의 직접 재현(features/15). train은 전부 ref=(0,0)이라 이 구조를
+    # 못 만든다 -- 재정렬로 만들어 floor가 여전히 feasible한지 못박는다.
+    print("\nref!=(0,0) re-anchor synthetics (train-invisible -- direct P3 −1 repro):")
+    failures += _check_ref_nonzero(files)
+
+    # 퇴화·악성 형상: crash·미완·비정수 없이 완전한 operations를 내는지.
+    print("\nmalformed-shape synthetics (no-crash + complete + integer):")
+    failures += _check_malformed(files)
+
     print()
     if failures:
-        print(f"FAIL -- {len(failures)} floor(s) infeasible / non-integer:")
+        print(f"FAIL -- {len(failures)} floor case(s) infeasible / non-integer / crashed:")
         for name, a, b in failures:
             print(f"  {name}: {a} | {b}")
         return 1
-    print(f"PASS -- {len(files)}/{len(files)} floors feasible+integer (normal & fast-finish), "
-          f"proc==0 sealed.")
+    print(f"PASS -- {len(files)}/{len(files)} train floors feasible+integer (normal & fast-finish), "
+          f"proc==0 sealed, ref!=(0,0) feasible, malformed shapes safe.")
     return 0
 
 

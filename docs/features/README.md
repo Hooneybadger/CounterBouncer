@@ -33,3 +33,4 @@
 | [12](./12-bay-clear-refill.md) | bay-clear-refill(obj3 국소탐색) | 채택 보류(노이즈) | B5·P5 | LEARNING_GUIDE B5·F1 |
 | [13](./13-floor-scale-hardening.md) | floor 스케일·경계 강건화(스케일 −1 제거) | 측정완료 | B1·P1 | LEARNING_GUIDE F2 |
 | [14](./14-relax-repair.md) | relax-and-repair(CP 코어 스케줄→nesting repair, obj1 천장) | 측정완료 | B3·B5·P5 | LEARNING_GUIDE F1 |
+| [15](./15-floor-ref-anchor.md) | floor reference-point 경계 정합(ref≠(0,0) −1 제거·검증기 Block 직접 호출) | 측정완료 | B1·P1 | LEARNING_GUIDE F2 |

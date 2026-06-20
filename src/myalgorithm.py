@@ -29,7 +29,7 @@ import tempfile
 import time
 
 try:  # flat layout: evaluation server / batch_runner
-    from utils import Bay, check_feasibility
+    from utils import Bay, Block, check_feasibility
     from baseline_greedy import _empty_bay_entry, _block_bbox, _build_operations
     from raster_engine import InstanceRaster
     from constructor import (
@@ -38,7 +38,7 @@ try:  # flat layout: evaluation server / batch_runner
     )
     from alns import alns
 except ImportError:  # IDE package layout
-    from ogc2026.baseline.utils import Bay, check_feasibility
+    from ogc2026.baseline.utils import Bay, Block, check_feasibility
     from ogc2026.baseline.baseline_greedy import (
         _empty_bay_entry, _block_bbox, _build_operations,
     )
@@ -80,26 +80,74 @@ except Exception:
 # 기하 헬퍼
 # -----------------------------------------------------------------------------
 
+def _ref_bbox(blk_data: dict, oi: int):
+    """검증기와 *완전히 동일한* 기준의 로컬 bbox -- reference point(첫 층 첫 정점)를 원점에 둔
+    월드 bbox. (min_x, min_y, max_x, max_y).
+
+    ★왜 `_block_bbox`가 아니라 이것인가 (features/15). 검증기 `Block.__post_init__`은 모든 정점을
+    `(x-ref_x, y-ref_y)`만큼 옮긴다(`utils.py:308-312`, ref=첫 층 첫 정점). 그래서 블록을 (0,0)에 놓은
+    `Block.bounding_rect()`가 곧 *ref 보정된* bbox다. 반면 baseline `_block_bbox`는 ref 보정을 생략하고
+    첫 정점이 (0,0)이라 *가정*한다. train 57560개 방향이 전부 ref=(0,0)이라 그 가정이 우연히 맞아
+    세 버전 동안 안 터졌지만, 숨김 인스턴스의 한 방향이라도 ref≠(0,0)이면 floor가 ref만큼 어긋나게
+    놓아 검증기 경계 위반(−1)을 낸다(재현: 한 블록 re-anchor → floor Stage2 boundary 위반). 검증기
+    `Block`을 직접 호출해 이 가정을 *제거*한다 -- 하드코딩 기하 복제가 아니라 정전(canonical) 코드라
+    어떤 ref에도 검증기와 일치한다. block_id는 기하에 무관해 0을 쓴다."""
+    return Block(0, blk_data, 0, 0, oi).bounding_rect()
+
+
+def _orient_corners(blk_data: dict):
+    """블록의 읽히는 모든 방향에 대해 `(oi, bb, px, py)`를 한 번만 계산한다 -- bb는 ref 보정된
+    `_ref_bbox`, (px,py)=좌하단(leftmost-lowest) 정수 코너. *베이 무관*이라 블록당 한 번이면 충분
+    (옛 코드는 베이마다 bbox를 다시 구해 n_bays배 낭비). 기하를 못 읽는 방향은 조용히 건너뛴다
+    (raise 없음)."""
+    out = []
+    for oi in range(len(blk_data.get("shape") or [])):
+        try:
+            bb = _ref_bbox(blk_data, oi)
+        except Exception:
+            continue
+        out.append((oi, bb, max(0, math.ceil(-bb[0])), max(0, math.ceil(-bb[1]))))
+    return out
+
+
 def _origin_fit(blk_data: dict, oi: int, bay: Bay):
-    """방향 oi를 베이의 최소 정수 위치에 놓을 때의 (px, py). 정수 격자에서 경계를
-    벗어나면 None.
+    """방향 oi를 베이의 최소 정수 위치에 놓을 때의 (px, py). 정수 격자에서 경계를 벗어나면 None.
+    절대 raise하지 않는다(기하를 못 읽으면 None → 호출부가 min-overflow로 처리).
 
-    px=ceil(-min_x), py=ceil(-min_y)로 월드 좌하단을 베이 모서리에 맞춘다. 실수
-    bbox가 베이에 들어가도(bw<=width) ceil 반올림이 오른쪽/위 경계를 넘길 수 있어
-    (꽉 찬 블록), 정수 위치에서의 월드 bbox를 직접 검사해야 경계 위반을 막는다.
-    bbox가 베이 안이면 모든 정점도 안이므로 이 검사로 boundary가 보장된다.
-
-    ★ 경계 검사를 검증기 `Bay.contains_block`(`bb[2] <= width`, 무허용)과 *정확히* 맞춘다.
-    px+bb[2]는 검증기의 bounding_rect[2]와 같은 값이라(둘 다 모든 층·같은 ref 평행이동),
-    `+1e-6` 과대 허용을 두면 경계에 sub-eps 걸치는 블록을 floor가 통과시키고 검증기는
-    거절해 floor가 −1을 낸다. 허용을 제거해 floor의 판정 = 검증기 판정으로 만든다.
-    """
-    bb = _block_bbox(blk_data, oi)  # (min_x, min_y, max_x, max_y) 로컬 좌표
+    px=ceil(-min_x), py=ceil(-min_y)로 reference point를 베이 모서리에 맞춘다. 판정이 검증기
+    `Bay.contains_block`과 *정확히* 같다: placed block의 월드 bbox = `_ref_bbox`+(px,py)이고,
+    px=max(0,ceil(-bb[0]))이 좌·하 경계(bb[0]+px≥0)를 자명 충족시키므로 우·상 경계
+    `px+bb[2]≤width ∧ py+bb[3]≤height` 두 부등식이 곧 contains_block이다(features/15)."""
+    try:
+        bb = _ref_bbox(blk_data, oi)
+    except Exception:
+        return None
     px = max(0, math.ceil(-bb[0]))
     py = max(0, math.ceil(-bb[1]))
     if px + bb[2] <= bay.width and py + bb[3] <= bay.height:
         return px, py
     return None
+
+
+def _min_overflow_place(corners, bays):
+    """어떤 (베이,방향)도 정수격자 코너에 안 들 때의 best-effort: 검증기 기준 경계 *초과가 가장
+    작은* (bay_id, oi, px, py)를 고른다(초과 0이면 실제 feasible). `_orient_corners`가 준 ref 보정
+    bbox로 측정해 검증기와 일치한다.
+
+    ★(0,0)을 쓰지 않는다 -- (0,0) 고정은 음수 min-corner 블록을 경계 밖에 놓아 −1을 내던 옛 버그의
+    근원이었다(features/15). 기하를 *전혀* 못 읽어 corners가 빈 블록(=표현 불가)에만 (0,0)·bay0로
+    떨어지는데, 그건 어떤 알고리즘도 못 푸는 본질적 infeasible이라 (0,0)이 손해를 더 키우지 않는다."""
+    best = None  # (overflow, bay_id, oi, px, py)
+    for oi, bb, px, py in corners:
+        for bay_id, bay in enumerate(bays):
+            ov = (max(0.0, px + bb[2] - bay.width)
+                  + max(0.0, py + bb[3] - bay.height))
+            if best is None or ov < best[0]:
+                best = (ov, bay_id, oi, px, py)
+    if best is None:
+        return 0, 0, 0, 0          # 모든 방향 기하 불가 -- 표현 불가 블록(인스턴스 본질적 infeasible)
+    _, bay_id, oi, px, py = best
+    return bay_id, oi, px, py
 
 
 def _assignment(block_id, bay_id, x, y, oi, entry, exit_t) -> dict:
@@ -154,49 +202,38 @@ def _guaranteed_place(blk_data: dict, bays: list, sorted_sched: list):
     원본과 동일하다(원본도 strict `<`라 첫 적합 방향이 그 베이의 대표였다).
 
     sorted_sched[bay] -- 시작시각 오름차순 정렬된 (entry,exit) 리스트(호출부가 유지).
-    반환: (bay_id, orient_idx, x, y, entry, exit_t)
+    반환: (bay_id, orient_idx, x, y, entry, exit_t). 절대 raise하지 않는다.
+
+    경계(stage 4-a)는 ref 보정된 코너(`_orient_corners`)가 검증기 `contains_block`과 *정확히*
+    같은 판정을 줘 보장한다 -- 방향별 bbox·코너는 베이 무관이라 블록당 한 번만 계산한다.
     """
-    r_time = int(blk_data["release_time"])
+    r_time = int(blk_data.get("release_time", 0) or 0)
     # proc=0이면 entry==exit가 돼 _build_operations가 같은 시각 EXIT를 ENTRY보다 앞에 놓고
-    # (Stage5: "EXIT before present") floor가 검증 없이 −1을 낸다. train 최소 proc=3이라 안
-    # 나타나지만, 숨김 인스턴스가 proc=0을 주면 보이지 않는 −1이다. max(1,·)로 1단위 점유시켜
-    # 표현 가능하게 만든다 -- proc≥1엔 무영향(no-op), 윈도우·exit·bay_tail이 같은 proc로 일관.
-    proc   = max(1, int(blk_data["processing_time"]))
-    n_bays = len(bays)
-    prefs  = blk_data.get("bay_preferences", [0.0] * n_bays)
-    n_orient = len(blk_data["shape"])
+    # (Stage5: "EXIT before present") floor가 −1을 낸다. max(1,·)로 1단위 점유시켜 표현 가능하게
+    # 만든다 -- proc≥1엔 무영향(no-op), 윈도우·exit·bay_tail이 같은 proc로 일관.
+    proc    = max(1, int(blk_data.get("processing_time", 0) or 0))
+    prefs   = blk_data.get("bay_preferences") or [0.0] * len(bays)
+    corners = _orient_corners(blk_data)         # [(oi, bb, px, py)] -- ref 보정, 베이 무관
 
     best = None  # (sort_key, bay_id, oi, px, py, entry)
     for bay_id, bay in enumerate(bays):
-        fit_oi = fit_pos = None
-        for oi in range(n_orient):
-            fit = _origin_fit(blk_data, oi, bay)
-            if fit is not None:
-                fit_oi, fit_pos = oi, fit
-                break                       # entry는 방향 무관 -- 첫 적합 방향이면 충분
-        if fit_oi is None:
+        fit = None
+        for oi, bb, px, py in corners:
+            if px + bb[2] <= bay.width and py + bb[3] <= bay.height:
+                fit = (oi, px, py)              # 첫 적합 방향 -- entry는 방향 무관
+                break
+        if fit is None:
             continue
         entry = _empty_bay_entry_fast(sorted_sched[bay_id], r_time, proc)
         pref = prefs[bay_id] if bay_id < len(prefs) else 0.0
-        sort_key = (entry, -pref)           # 가장 빨리 비는 베이, 동률이면 더 선호하는 베이
+        sort_key = (entry, -pref)               # 가장 빨리 비는 베이, 동률이면 더 선호하는 베이
         if best is None or sort_key < best[0]:
-            best = (sort_key, bay_id, fit_oi, fit_pos[0], fit_pos[1], entry)
+            best = (sort_key, bay_id, fit[0], fit[1], fit[2], entry)
 
     if best is None:
-        # 어떤 (베이,방향)도 정수 격자에서 안 맞음 = 이 블록은 사실상 배치 불가(인스턴스가
-        # 본질적으로 infeasible). 그래도 −1을 피하려는 최선으로 *경계 초과가 가장 작은*
-        # (베이,방향)을 고른다 -- orient 0 고정보다 엄밀히 낫고, 초과가 0이면 실제 feasible.
-        best_ov = None  # (overflow, bay_id, oi, px, py)
-        for bay_id, bay in enumerate(bays):
-            for oi in range(n_orient):
-                bb = _block_bbox(blk_data, oi)
-                px = max(0, math.ceil(-bb[0]))
-                py = max(0, math.ceil(-bb[1]))
-                ov = (max(0.0, px + bb[2] - bay.width)
-                      + max(0.0, py + bb[3] - bay.height))
-                if best_ov is None or ov < best_ov[0]:
-                    best_ov = (ov, bay_id, oi, px, py)
-        _, bay_id, oi, px, py = best_ov
+        # 어떤 (베이,방향)도 정수 격자 코너에 안 듦 = 블록이 본질적으로 배치 불가(인스턴스 infeasible).
+        # −1을 줄이는 최선으로 경계 초과가 가장 작은 배치를 고른다(초과 0이면 실제 feasible).
+        bay_id, oi, px, py = _min_overflow_place(corners, bays)
         entry = _empty_bay_entry_fast(sorted_sched[bay_id], r_time, proc)
         return bay_id, oi, px, py, entry, entry + proc
 
@@ -206,43 +243,26 @@ def _guaranteed_place(blk_data: dict, bays: list, sorted_sched: list):
 
 def _safe_finish_place(blk_data: dict, bays: list, bay_tail: list):
     """시간이 모자라거나(fast-finish) 정상 배치가 터졌을 때의 '값싸지만 *feasible*한' 직렬 배치.
+    절대 raise하지 않으며, 읽히는 블록엔 (0,0)을 쓰지 않는다(features/15).
 
-    ★ 이것이 P3 −1의 근본 수정이다. 옛 fast-finish/예외 경로는 블록을 (px,py)=(0,0)·orient 0에
-    고정 배치했는데, 학습·숨김 인스턴스의 블록 대다수는 회전 다각형이라 *로컬 min-corner가 음수*다
-    (train 측정: 54264/57560 정점이 음수 min). (0,0)에 놓으면 월드 min<0 → 베이 경계 밖 →
-    검증기 Stage2/4 경계 위반 → infeasible. 로컬 게이트는 throttle 없는 non-daemon이라 fast-finish가
-    안 걸려 이 −1을 한 번도 못 봤다(서버는 400% throttle + 큰 인스턴스 + 짧은 제한시간에서 floor가
-    deadline을 넘겨 fast-finish→(0,0)→−1). 측정: fast-finish 강제 시 train 12/12 infeasible.
-
-    그래서 (0,0) 대신 `_origin_fit`으로 *실제로 베이에 드는* 방향·위치(px=ceil(-min_x)≥0 시프트)를
-    찾는다. entry는 베이 tail(그 베이 마지막 exit) 이후라 빈-베이 윈도우 → 무충돌·크레인 자유가
-    자명. 가장 빨리 비는 베이부터 보고, 드는 첫 (베이,방향)을 쓴다. 베이별 O(orient)뿐(스케줄
-    스캔이 없어 정상 경로보다도 싸다 -- fast-finish의 속도 목적을 지키면서 feasibility를 회복).
+    ref 보정된 `_orient_corners`로 *실제로 베이에 드는* 방향·코너를 찾는다 -- 판정이 검증기
+    `contains_block`과 정확히 같다. (옛 코드는 ref 보정을 빠뜨린 `_block_bbox`라 첫 정점이 (0,0)이
+    아닌 방향을 경계 밖에 놓아 −1을 냈다 -- train은 전부 ref=(0,0)이라 못 드러낸 사각. features/15.)
+    entry는 베이 tail(그 베이 마지막 exit) 이후라 빈-베이 윈도우 → 무충돌·크레인 자유가 자명.
+    가장 빨리 비는 베이부터 보고, 드는 첫 (베이,방향)을 쓴다(스케줄 스캔이 없어 정상 경로보다도 싸다).
     반환: (bay_id, oi, px, py, entry, exit_t), 전부 검증기와 일치하는 feasible 값.
     """
     r_time = int(blk_data.get("release_time", 0) or 0)
-    proc = max(1, int(blk_data.get("processing_time", 0) or 0))  # proc=0 봉인(위 _guaranteed_place 주석)
-    n_orient = len(blk_data["shape"])
+    proc = max(1, int(blk_data.get("processing_time", 0) or 0))  # proc=0 봉인
+    corners = _orient_corners(blk_data)
     for bay_id in sorted(range(len(bays)), key=lambda j: max(bay_tail[j], r_time)):
         bay = bays[bay_id]
-        for oi in range(n_orient):
-            fit = _origin_fit(blk_data, oi, bay)   # 정수격자 경계검사 = 검증기와 동일
-            if fit is not None:
+        for oi, bb, px, py in corners:
+            if px + bb[2] <= bay.width and py + bb[3] <= bay.height:
                 entry = max(bay_tail[bay_id], r_time)
-                return bay_id, oi, fit[0], fit[1], entry, entry + proc
-    # 어느 (베이,방향)에도 정수 격자에서 안 듦 = 블록이 본질적으로 배치 불가(인스턴스 infeasible).
-    # 그래도 −1을 줄이는 최선으로 *경계 초과가 가장 작은* 배치를 고른다(초과 0이면 실제 feasible).
-    best_ov = None
-    for bay_id, bay in enumerate(bays):
-        for oi in range(n_orient):
-            bb = _block_bbox(blk_data, oi)
-            px = max(0, math.ceil(-bb[0]))
-            py = max(0, math.ceil(-bb[1]))
-            ov = (max(0.0, px + bb[2] - bay.width)
-                  + max(0.0, py + bb[3] - bay.height))
-            if best_ov is None or ov < best_ov[0]:
-                best_ov = (ov, bay_id, oi, px, py)
-    _, bay_id, oi, px, py = best_ov
+                return bay_id, oi, px, py, entry, entry + proc
+    # 어느 (베이,방향)에도 안 듦 = 본질적 infeasible. 경계 초과 최소 배치(초과 0이면 feasible).
+    bay_id, oi, px, py = _min_overflow_place(corners, bays)
     entry = max(bay_tail[bay_id], r_time)
     return bay_id, oi, px, py, entry, entry + proc
 
@@ -290,28 +310,30 @@ def _guaranteed_solution(prob_info: dict, deadline: float | None = None) -> dict
             try:
                 bay_id, oi, px, py, entry, exit_t = _safe_finish_place(blk_data, bays, bay_tail)
             except Exception:
-                # 기하조차 못 읽는 극단 블록(shape 누락 등) -- 최후의 자명 배치.
+                # _safe_finish_place는 raise하지 않지만 만일의 방어선 -- (0,0)이 아니라 ref 보정된
+                # min-overflow로 떨어진다(읽히는 블록엔 절대 (0,0) 금지, features/15).
                 r_time = int(blk_data.get("release_time", 0) or 0)
                 proc = max(1, int(blk_data.get("processing_time", 0) or 0))
-                bay_id = min(range(len(bays)), key=lambda j: max(bay_tail[j], r_time))
+                bay_id, oi, px, py = _min_overflow_place(_orient_corners(blk_data), bays)
                 entry = max(bay_tail[bay_id], r_time)
-                oi, px, py, exit_t = 0, 0, 0, entry + proc
-            bay_tail[bay_id] = exit_t
+                exit_t = entry + proc
+            if exit_t > bay_tail[bay_id]:
+                bay_tail[bay_id] = exit_t
             assignments.append(_assignment(bi, bay_id, px, py, oi, entry, exit_t))
             continue
         try:
             bay_id, oi, px, py, entry, exit_t = _guaranteed_place(blk_data, bays, bay_schedule)
         except Exception:
-            # 정상 배치 실패 -- (0,0) 자명배치는 음수 min-corner 블록서 경계위반(infeasible)이라
-            # *드는 위치로* 떨어뜨린다(tail 이후 빈-베이 윈도우). _safe_finish_place가 feasible 보장.
+            # _guaranteed_place는 raise하지 않지만 만일의 방어선 -- (0,0) 금지, ref 보정 경로로만
+            # 떨어진다(_safe_finish_place → min-overflow). features/15.
             try:
                 bay_id, oi, px, py, entry, exit_t = _safe_finish_place(blk_data, bays, bay_tail)
             except Exception:
                 r_time = int(blk_data.get("release_time", 0) or 0)
                 proc = max(1, int(blk_data.get("processing_time", 0) or 0))
-                bay_id = min(range(len(bays)), key=lambda j: max(bay_tail[j], r_time))
+                bay_id, oi, px, py = _min_overflow_place(_orient_corners(blk_data), bays)
                 entry = max(bay_tail[bay_id], r_time)
-                oi, px, py, exit_t = 0, 0, 0, entry + proc
+                exit_t = entry + proc
         bisect.insort(bay_schedule[bay_id], (entry, exit_t))  # 정렬 유지
         if exit_t > bay_tail[bay_id]:
             bay_tail[bay_id] = exit_t
@@ -622,6 +644,10 @@ def algorithm(prob_info, timelimit=60):
 
     # 1) floor: 증명적으로 feasible한 보장 답. 정렬 빈-베이 윈도우로 거의 선형이라 보통 빠르나,
     #    초대형 인스턴스 대비 deadline을 줘 *무조건* return_cap 안에 마치게 한다(스케일 −1 차단).
+    #    feasibility는 *구성의 정확성*(ref 보정된 코너 = 검증기 contains_block)으로 보장하고, 그
+    #    정확성은 제출 전 `tools/floor_gate.py`가 ref≠(0,0)·malformed·fast-finish를 강제로 때려
+    #    검증한다(features/15). 런타임 인라인 check는 두지 않는다 -- 로그뿐이라 서버서 관측 불가하고
+    #    (더 나은 폴백도 없다) 메인의 fork 전 시간만 잡아먹는다. 검증의 책임은 게이트에 둔다.
     try:
         floor = _guaranteed_solution(prob_info, deadline=return_cap)
     except Exception as e:
