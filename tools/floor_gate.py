@@ -143,6 +143,79 @@ def _check_malformed(files):
     return failures
 
 
+def _check_fp_boundary(files):
+    """부동소수 경계 정합(features/16): floor의 fit 판정이 검증기 contains_block과 *float 연산 순서까지*
+    일치하는지. ref가 분수이고 블록 extent가 베이 변과 1 ULP 차로 일치하면, 옛 floor는 원점 bbox에 px를
+    더해 판정(py+bb[3]≤h)해 검증기(placed에서 bbox 재계산)와 어긋나 −1을 냈다. 정수 shift re-anchor는
+    이를 못 드러낸다(정수 ref→정확). (a) QA red-team이 찾은 결정적 repro와 (b) 분수 re-anchor sweep으로 막는다."""
+    import random
+    failures = []
+    # (a) 결정적 repro: prob_37 블록 227을 분수 re-anchor한 단일-베이 인스턴스. 옛(원점-bbox) 판정이면
+    #     orient 2를 베이 변에 1 ULP 걸쳐 놓아 INFEAS; 검증기-Block 판정이면 깨끗한 orient 6을 골라 OK.
+    p37 = [f for f in files if os.path.basename(f) == "prob_37.json"]
+    if p37:
+        pi0 = json.load(open(p37[0]))
+        if len(pi0.get("blocks", [])) > 227 and pi0.get("bays"):
+            blk = copy.deepcopy(pi0["blocks"][227])
+            dx, dy = (1.5860842108028042, -2.9441886496773777)
+            for o in blk["shape"]:
+                o["layers"] = [[[x + dx, y + dy] for x, y in L] for L in o["layers"]]
+            pi = {"blocks": [blk], "bays": [pi0["bays"][0]]}
+            nf, ns, nint, nv = _check_floor(pi, None)
+            ff, fs, fint, fv = _check_floor(pi, time.time() - 100.0)
+            ok = nf and ff and nint and fint
+            print(f"  FP-boundary repro (prob_37 blk227 fractional re-anchor, single-bay): "
+                  f"normal={'OK' if nf else f'INFEAS(S{ns})'} fast={'OK' if ff else f'INFEAS(S{fs})'} -> {'OK' if ok else 'FAIL'}")
+            if not ok:
+                failures.append(("FP-boundary repro", f"normal_S{ns} {nv}", f"fast_S{fs} {fv}"))
+    # (b) 분수 re-anchor sweep: 블록마다 분수 offset → 모든 ref가 분수가 돼 정수 shift가 못 보는 FP 발산을
+    #     노린다. re-anchor는 (정수든 분수든) feasibility 보존이라(검증기가 ref로 재정렬) 결과는 feasible해야 한다.
+    sample = files[:6] + files[-3:]
+    for idx, f in enumerate(sample):
+        pi = json.load(open(f))
+        rng = random.Random(20260620 + idx)
+        fpats = [
+            ("frac+(.5,.5)", lambda i: (i % 7 + 0.5, i % 5 + 0.5)),
+            ("frac-mixed",   lambda i: ((-1) ** i * (i % 9 + 1.0 / 3), (i % 6) - 8.0 / 3)),
+            ("frac-rand",    lambda i, rng=rng: (rng.uniform(-50, 50), rng.uniform(-50, 50))),
+        ]
+        for pname, fn in fpats:
+            pim = _reanchor(pi, fn)
+            nf, ns, nint, nv = _check_floor(pim, None)
+            ff, fs, fint, fv = _check_floor(pim, time.time() - 100.0)
+            if not (nf and ff and nint and fint):
+                print(f"  {os.path.basename(f):13} frac[{pname:13}] "
+                      f"normal={'OK' if nf else f'INFEAS(S{ns})'} fast={'OK' if ff else f'INFEAS(S{fs})'} -> FAIL")
+                failures.append((f"{os.path.basename(f)} frac[{pname}]", f"normal_S{ns} {nv}", f"fast_S{fs} {fv}"))
+    if not failures:
+        print(f"  fractional re-anchor sweep ({len(sample)} inst × 3 patterns) + red-team repro: all feasible")
+    return failures
+
+
+def _check_fractional_timing(files):
+    """분수 release/processing time(features/17): floor가 `int()`로 *내림*하면 entry<release(또는
+    exit−entry<proc)가 돼 검증기 Stage1 위반→−1. `_ceil_int`로 올려야 한다. train timing은 전부 정수라
+    못 드러나는 사각(=ref 버그와 같은 '훈련-속성 가정' 계열, QA red-team round2 발견). 알려진-feasible
+    인스턴스에 분수 timing을 주입해 막는다 -- exclusive-window floor는 어느 시각에도 블록을 둘 수 있어
+    release를 늦추거나 proc를 늘려도 feasible(makespan 제약 없음)."""
+    failures = []
+    sample = files[:5] + files[-2:]
+    for f in sample:
+        pi = copy.deepcopy(json.load(open(f)))
+        for i, b in enumerate(pi["blocks"]):
+            b["release_time"] = (b.get("release_time", 0) or 0) + (0.1 + (i % 9) * 0.1)
+            b["processing_time"] = (b.get("processing_time", 1) or 1) + 0.5
+        nf, ns, nint, nv = _check_floor(pi, None)
+        ff, fs, fint, fv = _check_floor(pi, time.time() - 100.0)
+        if not (nf and ff and nint and fint):
+            print(f"  {os.path.basename(f):13} fractional-timing "
+                  f"normal={'OK' if nf else f'INFEAS(S{ns})'} fast={'OK' if ff else f'INFEAS(S{fs})'} -> FAIL")
+            failures.append((f"{os.path.basename(f)} fractional-timing", f"normal_S{ns} {nv}", f"fast_S{fs} {fv}"))
+    if not failures:
+        print(f"  fractional release/processing on {len(sample)} known-feasible instances: all feasible (ceil, not truncate)")
+    return failures
+
+
 def main() -> int:
     files = sorted(glob.glob(os.path.join(_REPO, "train", "*.json")),
                    key=lambda p: int(p.split("_")[-1].split(".")[0]))
@@ -185,6 +258,14 @@ def main() -> int:
     print("\nmalformed-shape synthetics (no-crash + complete + integer):")
     failures += _check_malformed(files)
 
+    # 부동소수 경계 정합: floor fit 판정 = 검증기 contains_block(float 순서까지). features/16.
+    print("\nFP-boundary / fractional-ref synthetics (floor predicate == validator contains_block):")
+    failures += _check_fp_boundary(files)
+
+    # 분수 timing: release/proc를 ceil(내림 아님)로 처리하는지. features/17.
+    print("\nfractional-timing synthetics (ceil release/proc, not truncate):")
+    failures += _check_fractional_timing(files)
+
     print()
     if failures:
         print(f"FAIL -- {len(failures)} floor case(s) infeasible / non-integer / crashed:")
@@ -192,7 +273,7 @@ def main() -> int:
             print(f"  {name}: {a} | {b}")
         return 1
     print(f"PASS -- {len(files)}/{len(files)} train floors feasible+integer (normal & fast-finish), "
-          f"proc==0 sealed, ref!=(0,0) feasible, malformed shapes safe.")
+          f"proc==0 sealed, ref!=(0,0) feasible, malformed shapes safe, FP-boundary sound, fractional-timing ceil'd.")
     return 0
 
 
