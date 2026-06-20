@@ -1,7 +1,7 @@
 # floor 스케일·경계 강건화: 메인의 마지막 무경계 작업을 없앤다
 
 - **state**: 측정완료
-- **코드**: `src/myalgorithm.py:_empty_bay_entry_fast()` · `_guaranteed_place()` · `_safe_finish_place()` · `_guaranteed_solution()` · `_origin_fit()` · 회귀 게이트 `tools/floor_gate.py`
+- **코드**: `src/myalgorithm.py:_empty_bay_entry_fast()` · `_guaranteed_place()` · `_safe_finish_place()` · `_guaranteed_solution()` · 회귀 게이트 `tools/floor_gate.py`  (★당시의 `_origin_fit`은 [15](./15-floor-ref-anchor.md)·[16](./16-floor-fp-soundness.md)에서 `_orient_corners`/`_placed_corner`로 대체됨 — 아래 본문은 그 시점 기준)
 - **관련 결정**: B1·P1(feasibility-first) — [11 supervisor](./11-supervisor-feasibility.md)의 후속(메인 무경계 작업 제거의 마지막 조각)
 - **배경**: LEARNING_GUIDE F2 · [GLOSSARY의 빈-베이 윈도우](../GLOSSARY.md)
 - **측정**: `results/v102_2s/` · `results/v102_scale/` · `results/v12p1_full_60s_j1/`(무회귀)

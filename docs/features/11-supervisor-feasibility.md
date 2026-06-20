@@ -67,8 +67,10 @@ deadline을 넘겨도 남은 블록을 마저 배치하느라 300블록 기준 �
 직렬 배치이고 300블록에서도 0.7초 안에 끝나며, 메인이 손에 쥐고 있는 보장 답이다. 둘째, `InstanceRaster`를
 생성한다(약 3밀리초). 둘 다 시간이 묶일 수 없는 hard-bounded 작업이다.
 
-그다음 메인은 `nw`개(코어 수, 서버 4)의 자식을 fork한다. 각 자식은 `_worker_full`로 **best-of-3 구성을 짓고
-그 위에서 ALNS와 선호 개선을 돌려** 결과를 큐에 넣는다. 구성(`_construct_incumbent`)은 `(edd, blf)`·
+그다음 메인은 `nw`개(코어 수, 서버 4)의 자식을 raw `os.fork()`로 띄운다(★서버가 daemon 프로세스라
+`multiprocessing.Process`는 'daemonic processes can't have children'으로 막히지만 `os.fork()`는 OS 직접호출이라
+통과한다 — v1.1.1 P3 −1의 근본 수정). 각 자식은 `_child_body`로 **best-of-3 구성을 짓고 그 위에서 ALNS와 선호
+개선을 돌려** 결과를 임시파일에 `pickle`로 쓰고 원자적 `os.rename`한다(파일 존재 = 완전 기록 보장). 구성(`_construct_incumbent`)은 `(edd, blf)`·
 `(edd, scan)`·`(edd_area, scan)` 중 가장 좋은 base를 고르는데, 무작위가 없어 결정적이라 **모든 자식이 같은
 최고 base를 얻고 시드만 ALNS에서 갈린다** — v1.0.0의 포트폴리오(최고 base에 4시드)와 정확히 같은
 탐색이다. v1.0.0은 이 구성을 메인에서 한 번만 돌려 fork로 공유했지만, 그 무거운 구성이 짧은 제한시간에
@@ -78,10 +80,11 @@ deadline을 넘겨도 남은 블록을 마저 배치하느라 300블록 기준 �
 자식이 만드는 `committed`는 각자 고유라 격리된다. 자식 내부 예산은 ALNS 0.83·polish 0.88이고, 그 뒤 최종
 `check_feasibility`까지 보통 0.90 안에 끝나 메인의 수집 cap이 거둔다.
 
-메인은 감독자로서 `return_cap = t0 + 0.93 × timelimit`까지 `q.get(timeout=...)`으로만 결과를 거둔다. 이
-수집 루프는 timeout으로 묶여 있어 자식이 무엇을 하든 메인은 `return_cap`에 반드시 빠져나온다. 그 뒤 남은
-자식을 `terminate()`(SIGTERM, 비동기라 tail 없음 — Shapely C 호출에 묶인 자식도 OS가 종료)하고, 거둔 것 중
-가장 좋은 feasible 해를, 없으면 floor를 반환한다. 0.93은 CLAUDE.md의 절대 규칙값이고, 메인은 그 뒤 무거운
+메인은 감독자로서 `return_cap = t0 + 0.93 × timelimit`까지 `os.waitpid(pid, WNOHANG)` 폴링으로 *종료한* 자식의
+결과 파일만 비차단 수집한다(`pickle.load`). 이 수집 루프는 `return_cap`으로 묶여 있어 자식이 무엇을 하든 메인은
+그 시각에 반드시 빠져나온다. 그 뒤 남은 자식을 `_kill_all`이 `SIGKILL`로 종료·reap하고(`terminate`가 아니라
+KILL이라 CP-SAT·Shapely C 확장에 묶인 자식도 확실히 죽는다), 거둔 것 중 가장 좋은 feasible 해를, 없으면 floor를
+반환한다. 0.93은 CLAUDE.md의 절대 규칙값이고, 메인은 그 뒤 무거운
 일을 하지 않으므로(수집·종료·min·반환만, ~밀리초) 7% 여유가 느린 서버의 직렬화·IPC tail까지 덮는다. 핵심
 불변식은 *메인에는 deadline을 넘길 수 있는 무거운 일이 없다*는 한 가지 — floor와 ir만 직접 하고 나머지는 종료
 가능한 자식 안에 둔다. floor 자체도 블록별 try로 감싸 *어떤 블록이 망가져도 빈 operations(= 미배치

@@ -1,7 +1,7 @@
 # floor reference-point 경계 정합: 검증기 기하를 직접 호출해 ref≠(0,0) −1을 없앤다
 
 - **state**: 측정완료
-- **코드**: `src/myalgorithm.py:_ref_bbox()` · `_orient_corners()` · `_origin_fit()` · `_min_overflow_place()` · `_guaranteed_place()` · `_safe_finish_place()` · 회귀 게이트 `tools/floor_gate.py`
+- **코드**: `src/myalgorithm.py:_ref_bbox()` · `_orient_corners()` · `_min_overflow_place()` · `_guaranteed_place()` · `_safe_finish_place()` · 회귀 게이트 `tools/floor_gate.py`  (★이 문서가 도입한 `_origin_fit`의 fit 판정은 [16](./16-floor-fp-soundness.md)에서 `_placed_corner`+검증기 `contains_block`으로 대체됨 — 부동소수 ULP 발산 차단)
 - **관련 결정**: B1·P1(feasibility-first) — [13 floor 스케일·경계 강건화](./13-floor-scale-hardening.md)의 후속이자 *정정*, [11 supervisor](./11-supervisor-feasibility.md)의 계열
 - **배경**: LEARNING_GUIDE F2 · [GLOSSARY의 빈-베이 윈도우](../GLOSSARY.md)
 - **측정**: `results/v13_base/`(기준, 수정 전 60s) vs `results/fix13_ref_correct/`(무회귀) · ref≠(0,0) 합성 게이트
@@ -18,7 +18,7 @@ floor가 well-formed feasible 인스턴스에서 −1을 낼 수 있는 자리�
 
 ## 하는 일과 내부 동작
 
-핵심은 floor가 기하를 *직접 복제*하지 않고 *검증기 코드를 호출*하게 만든 것이다. `_ref_bbox(blk_data, oi)`는 블록을 (0,0)에 놓은 검증기 `Block(0, blk_data, 0, 0, oi).bounding_rect()`를 돌려준다 — 이 값이 곧 ref 보정된 로컬 bbox다(검증기가 정점을 `-ref`만큼 옮기므로). 손으로 ref를 빼는 식을 다시 적지 않는 이유는, *바로 그 손계산이 13에서 ref 항을 빠뜨려 이 버그를 만들었기* 때문이다. 정전(canonical) 코드를 호출하면 어떤 ref에도 검증기와 정의상 일치한다. `_origin_fit`은 이 bbox로 `px=max(0,ceil(-bb[0]))`, `py=max(0,ceil(-bb[1]))`를 잡고 `px+bb[2]≤width ∧ py+bb[3]≤height`를 본다 — 이 네 부등식이 정확히 placed block의 `contains_block`이다(월드 bbox = `_ref_bbox`+(px,py), 좌·하 경계는 px·py 선택이 자명 충족). 방향별 bbox·코너는 베이와 무관하므로 `_orient_corners`가 블록당 한 번만 계산해 베이 루프에서 O(1)로 비교한다(옛 코드의 베이마다 재계산을 없애 비용은 오히려 같거나 낮다).
+핵심은 floor가 기하를 *직접 복제*하지 않고 *검증기 코드를 호출*하게 만든 것이다. `_ref_bbox(blk_data, oi)`는 블록을 (0,0)에 놓은 검증기 `Block(0, blk_data, 0, 0, oi).bounding_rect()`를 돌려준다 — 이 값이 곧 ref 보정된 로컬 bbox다(검증기가 정점을 `-ref`만큼 옮기므로). 손으로 ref를 빼는 식을 다시 적지 않는 이유는, *바로 그 손계산이 13에서 ref 항을 빠뜨려 이 버그를 만들었기* 때문이다. 정전(canonical) 코드를 호출하면 어떤 ref에도 검증기와 정의상 일치한다. `_origin_fit`은 이 bbox로 `px=max(0,ceil(-bb[0]))`, `py=max(0,ceil(-bb[1]))`를 잡고 `px+bb[2]≤width ∧ py+bb[3]≤height`를 본다 — 이 네 부등식이 정확히 placed block의 `contains_block`이다(월드 bbox = `_ref_bbox`+(px,py), 좌·하 경계는 px·py 선택이 자명 충족). (★단 이 등치는 부동소수 연산 순서에서 ~1 ULP 어긋날 수 있다 — [16](./16-floor-fp-soundness.md)이 그 사각을 찾아 수동 부등식을 검증기 `contains_block` 직접 호출(`_placed_corner`)로 대체했다.) 방향별 bbox·코너는 베이와 무관하므로 `_orient_corners`가 블록당 한 번만 계산해 베이 루프에서 O(1)로 비교한다(옛 코드의 베이마다 재계산을 없애 비용은 오히려 같거나 낮다).
 
 배치 함수들은 이 정합 위에서 *예외에 강건하고 (0,0)을 절대 쓰지 않게* 다시 짰다. `_guaranteed_place`(빈-베이 윈도우)와 `_safe_finish_place`(fast-finish 직렬)는 코너가 드는 첫 (베이,방향)을 쓰고, 어디에도 안 들면 `_min_overflow_place`로 *경계 초과가 가장 작은* 배치를 고른다(초과 0이면 실제 feasible). 읽히는 블록이 (0,0)·orient 0으로 떨어지던 옛 예외 경로 두 곳(`_guaranteed_solution`의 fast-finish 폴백과 정상 폴백)을 제거했다 — (0,0)은 음수 min-corner 블록을 경계 밖에 놓는 또 다른 −1 표면이었다. 이제 (0,0)은 *기하를 전혀 못 읽는* 블록(=표현 불가, 인스턴스가 본질적으로 infeasible)에만 닿고, 그 경우엔 어떤 위치도 손해를 줄이지 못한다.
 

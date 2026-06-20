@@ -641,6 +641,12 @@ def algorithm(prob_info, timelimit=60):
       worst case: 자식이 전부 제때 결과를 못 주면 메인은 floor(증명적 feasible)를 반환한다 --
       품질은 낮아도 −1은 아니다. 이것이 feasibility-first의 본령이다.
     """
+    # ★ 최외곽 크래시 가드(전역 try/except 정신, 설계 리뷰 패널 발견). prob_info가 dict가 아니면
+    #   아래 .get/인덱싱이 floor 계산 *전에* 터져 −1(algo_error)이 된다. 비-dict는 빈 operations로
+    #   graceful 반환한다 -- 서버는 항상 dict를 주니 정상 입력·train엔 무영향이고, 키 누락(bays/blocks)은
+    #   아래 floor의 try/except가 빈 dict로 흡수한다. feasibility-first는 "무슨 일이 있어도 크래시 금지".
+    if not isinstance(prob_info, dict):
+        return {"operations": {}}
     t0 = time.time()
     name = prob_info.get("name", "?")
     n = len(prob_info.get("blocks", []))
