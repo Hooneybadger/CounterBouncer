@@ -327,12 +327,18 @@ int main(int argc,char**argv){
     int *best_buf=malloc(sizeof(int)*7*N_BLOCKS); int best_n=0; double best_obj=-1;
     double max_s = (argc>3) ? atof(argv[3]) : 0.0;   /* 0=무제한, >0=벽시계 상한(초) */
     struct timespec t0; clock_gettime(CLOCK_MONOTONIC,&t0);
-    /* 배치: M개 순서를 각각 construct, 내부 obj로 best 선택. 시간 가드로 든 만큼만. */
+    double last_dur = 0.0;   /* 직전 순서 construct 소요(다음 순서 예측용) */
+    /* 배치: M개 순서를 각각 construct, 내부 obj로 best 선택. *정밀* 시간 가드 -- 매 순서마다
+     * 체크하고, "현 경과 + 직전 순서 소요"가 max_s를 넘으면 다음 순서를 *시작하지 않는다*
+     * (overshoot 0 보장). 대형은 순서당 수 초라 옛 8순서마다 체크는 max_s를 크게 넘겼다.
+     * m=0(EDD)은 항상 돌아 ≥1 결과를 보장한다(최악=단일 EDD=옛 동작, 무회귀). */
     for(int m=0;m<N_ORD;m++){
-        if(max_s>0 && (m&7)==0){
+        if(max_s>0 && m>0){
             struct timespec tn; clock_gettime(CLOCK_MONOTONIC,&tn);
-            if((tn.tv_sec-t0.tv_sec)+(tn.tv_nsec-t0.tv_nsec)/1e9 > max_s) break;
+            double el=(tn.tv_sec-t0.tv_sec)+(tn.tv_nsec-t0.tv_nsec)/1e9;
+            if(el + last_dur > max_s) break;   /* 다음 순서가 예산 내 못 끝남 -> 정지 */
         }
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
         for(int b=0;b<N_BAYS;b++){ comm_n[b]=0; bay_loads[b]=0; }
         out_n=0;
         int *ord=&ORDERS[(size_t)m*N_BLOCKS];
@@ -342,6 +348,8 @@ int main(int argc,char**argv){
             best_obj=obj; best_n=out_n;
             memcpy(best_buf,out_buf,sizeof(int)*7*(size_t)out_n);
         }
+        struct timespec te; clock_gettime(CLOCK_MONOTONIC,&te);
+        last_dur=(te.tv_sec-ts.tv_sec)+(te.tv_nsec-ts.tv_nsec)/1e9;
     }
     FILE *f=fopen(argv[2],"wb"); if(!f){perror("out");return 2;}
     fwrite(&best_obj,8,1,f); fwrite(&best_n,4,1,f); fwrite(best_buf,4,7*best_n,f);

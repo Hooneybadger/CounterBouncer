@@ -25,6 +25,7 @@ import random
 import struct
 import subprocess
 import tempfile
+import time
 
 try:  # flat layout (제출/batch_runner)
     from utils import check_feasibility
@@ -138,8 +139,12 @@ def _parse(path):
     return c_obj, assignments
 
 
-def _run_binary(prob_info, ir, orders, max_s, timeout):
-    """marshal → subprocess(scan_engine in out [max_s]) → parse. (c_obj, assignments) 또는 None."""
+def _run_binary(prob_info, ir, orders, max_s, timeout, deadline=None):
+    """marshal → subprocess(scan_engine in out [max_s]) → parse. (c_obj, assignments) 또는 None.
+
+    deadline(벽시계 절대시각)을 주면 *마샬 직후* 남은 시간으로 max_s를 정한다 -- 마샬(대형 Shapely
+    래스터화)이 가변이라, 여러 순서를 시도할 때 마샬+배치가 deadline을 넘지 않게 한다. C는 정밀
+    시간가드(순서마다 체크+다음순서 예측)로 max_s를 지키고, EDD가 첫 순서라 1개만 들어도 안전."""
     if not c_engine_available():
         return None
     tmpdir = None
@@ -148,6 +153,8 @@ def _run_binary(prob_info, ir, orders, max_s, timeout):
         inp = os.path.join(tmpdir, "in.bin")
         outp = os.path.join(tmpdir, "out.bin")
         _marshal(prob_info, ir, inp, orders)
+        if max_s is None and deadline is not None:
+            max_s = max(1.0, deadline - time.time() - 1.5)   # 마샬 후 남은 배치 예산
         cmd = [_BINARY, inp, outp]
         if max_s is not None:
             cmd.append(str(max_s))
@@ -166,14 +173,18 @@ def _run_binary(prob_info, ir, orders, max_s, timeout):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def run_c_engine(ir, prob_info, timeout=None):
-    """C scan 엔진으로 단일 EDD construct → (objective, solution_dict). 실패 시 None(호출부 폴백).
+def run_c_engine(ir, prob_info, timeout=None, deadline=None):
+    """C scan 엔진으로 *4개 결정 순서*(EDD·edd_area·slack·release) best-of construct →
+    (objective, solution_dict). 실패 시 None(호출부 폴백).
 
-    ir -- InstanceRaster(마스크 캐시). prob_info -- 인스턴스. timeout -- subprocess 벽시계 상한(초).
+    대형(n>350)서도 구성 순서가 obj를 가른다 -- 측정 900-혼잡 EDD단일 338.7M vs 4순서 best
+    332.2M(−1.9%, features/18·19). 각 construct가 비싸(900블록 ~5s) deadline-적응 max_s + C 정밀
+    시간가드로 든 만큼만 돌고(EDD가 첫 순서라 1개만 들어도 = 옛 단일 EDD와 동일 = 무회귀), 시간이
+    남으면 더 나은 순서를 찾는다. deadline -- 벽시계 절대 마감(없으면 무제한, 호출부가 줘 overrun 차단).
     반환 solution은 검증기 통과(feasible)만; infeasible/실패는 None.
     """
-    res = _run_binary(prob_info, ir, [_edd_order(prob_info["blocks"])],
-                      max_s=None, timeout=timeout)
+    res = _run_binary(prob_info, ir, _gen_orders(prob_info, ir, 4, 0),
+                      max_s=None, timeout=timeout, deadline=deadline)
     if res is None:
         return None
     try:

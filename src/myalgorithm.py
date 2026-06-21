@@ -488,7 +488,13 @@ def _cengine_body(ir, prob_info, t0, timelimit, seed):
     (obj, solution) 반환. 대형-혼잡서 Python scan이 못 끝내던 339M 품질을 60초 안에 낸다
     (features/18). C는 Python scan의 byte-identical 복제(train 10개 확인). 실패(바이너리 부재·
     파싱·infeasible·예외) 시 표준 Python 경로로 폴백 -- *순수 추가*(best-of 무회귀, floor 최후보루)."""
-    res = run_c_engine(ir, prob_info, timeout=max(5.0, timelimit))
+    # deadline: 마샬+배치(여러 순서)+최종 check가 return_cap(0.93·tl) 전에 끝나게 묶는다(overrun 차단).
+    # check_feasibility는 블록수에 비례(대형 ~수 초)하므로 그만큼 빼 둔다 -- C는 정밀 시간가드로
+    # deadline 안에 든 순서만 돌고, 못 들면 1순서(EDD)=옛 동작으로 안전 degrade.
+    n = len(prob_info.get("blocks", []))
+    check_margin = max(4.0, n * 0.012)
+    deadline = t0 + timelimit * 0.93 - check_margin
+    res = run_c_engine(ir, prob_info, timeout=max(5.0, timelimit), deadline=deadline)
     if res is None:
         return _full_body(ir, prob_info, t0, timelimit, seed)
     return res  # (objective, solution_dict) -- 대형서 ALNS inert이라 base를 바로 쓴다

@@ -23,6 +23,8 @@
 
 [포트폴리오](./10-seed-portfolio.md) 안에서 자식 0이 C 엔진을 맡는다(나머지는 표준 Python). C가 None(바이너리 부재·비-0 종료·파싱오류·infeasible·예외 — 서버 호환 실패 포함)을 내면 그 자식이 표준 Python 구성으로 폴백하므로 **순수 추가**다 — best-of가 무회귀를, [supervisor floor](./11-supervisor-feasibility.md)가 −1 불가를 지킨다.
 
+**대형도 구성 순서가 obj를 가른다 — 그래서 C 엔진은 단일 EDD가 아니라 4개 결정 순서**(EDD·edd_area·slack·release)**의 best-of로 construct한다**([features/19](./19-order-portfolio.md)의 순서 포트폴리오 통찰을 대형에 적용). 측정: 900-혼잡에서 EDD 단일 338,679,249 대 4순서 best **332,308,186(−1.9%)**. 단 대형은 순서당 construct가 비싸(900블록 ~5초) 네 순서를 다 못 돌 수 있어, `run_c_engine`이 *마샬 직후 남은 시간*으로 C 배치의 `max_s`를 정하고(`deadline = return_cap − check_여유(블록수 비례)`), C는 **정밀 시간가드**로 든 순서만 評価한다 — 매 순서마다 "현 경과 + 직전 순서 소요 > max_s"면 다음 순서를 *시작하지 않아*(overshoot 0) deadline을 넘기지 않고, EDD가 첫 순서라 1개만 들어도 옛 단일 EDD와 동일하다(무회귀). 옛 8순서마다 체크는 대형서 순서당 수 초라 너무 성겨 짧은 제한시간(10초 환산 검증서 tl=30·900블록)에 자식이 [return_cap](../GLOSSARY.md)을 넘겨 죽었는데(2.38억 회귀), 정밀가드가 그것을 단일 EDD(3.39억)로 안전 degrade해 고쳤다.
+
 ## 버린 선택지들
 
 **순수 파이썬 가속**(features/08)은 1.1~1.3×라 60초/900블록을 못 맞춰 버렸다 — 단 행 단위 `feasible_positions`는 byte-identical이라 전역 채택돼 *보조로* 남는다. **타깃 nesting 후보**(`blfnest`: 앵커 레이어별 모서리)는 nesting이 앵커-가장자리에 정렬되지 않아 scan의 339M에 못 닿고(366M) 더 느려 기각했다. **Rust**(jagua-rs/sparrow)는 정전 참조이나 — (a) 우리 병목은 2D nesting *품질*이 아니라 시간축+크레인 *스캔 속도*라 jagua가 drop-in이 아니고([V2_DESIGN](../V2_DESIGN.md)이 품질로 기각), (b) 로컬에 Rust 툴체인이 없고 gcc 정적링크는 있어, 같은 속도를 더 단순·확실하게 주는 **C**를 택했다. **쿼리당 subprocess**는 IPC 비용으로 죽으니, *인스턴스 전체 구성*을 한 번 호출하는 덩어리 단위로 한다(마샬 1회 + C 1회).
