@@ -41,7 +41,20 @@ _BINARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_engine"
 
 
 def c_engine_available() -> bool:
-    """바이너리가 존재하고 실행 가능한가."""
+    """바이너리가 존재하고 실행 가능한가.
+
+    ★평가 서버가 제출 zip을 Python `zipfile.extractall`로 풀면 실행권한(+x)이 *벗겨진다*
+    (0o644로 추출 -- zipfile의 알려진 동작). 그러면 `os.access(X_OK)`가 False라 C 엔진이
+    통째로 비활성→standard 폴백되고(제출 v1.3.0이 직전과 obj 동일했던 근본 원인), cengine·
+    portfolio 이득이 서버서 0이 된다. 그래서 *런타임에 chmod로 +x를 복원*한다 -- 추출 방식과
+    무관하게 바이너리를 실행 가능으로 만든다(파일 소유자라 chmod 허용). 로컬(src 직접, 이미 +x)
+    엔 무영향. chmod가 막혀도(읽기전용 등) except로 흡수하고 X_OK 검사로 최종 판정→실패 시
+    폴백이라 −1 불가."""
+    if os.path.isfile(_BINARY):
+        try:
+            os.chmod(_BINARY, 0o755)
+        except Exception:
+            pass
     return os.path.isfile(_BINARY) and os.access(_BINARY, os.X_OK)
 
 
