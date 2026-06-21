@@ -75,6 +75,19 @@ except Exception:
     def obj3_assign_repair(*a, **k):  # 폴백 스텁
         return None
 
+# C scan 엔진(대형-혼탑 단축-tl 레버). 동봉 정적 바이너리가 Python scan을 byte-identical·19×로
+# 돌려 60초 안에 339M 품질을 완주한다(features/18). 바이너리 부재·실패 시 안전하게 None→폴백.
+try:
+    try:
+        from c_engine import run_c_engine, c_engine_available
+    except ImportError:
+        from ogc2026.src.c_engine import run_c_engine, c_engine_available
+    _CENGINE_OK = c_engine_available()
+except Exception:
+    _CENGINE_OK = False
+    def run_c_engine(*a, **k):  # 폴백 스텁
+        return None
+
 
 # -----------------------------------------------------------------------------
 # 기하 헬퍼
@@ -381,13 +394,20 @@ def _construct_incumbent(ir, prob_info, t0, timelimit):
     return best
 
 
-def _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed, verbose=False):
+def _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed, verbose=False,
+             light=False):
     """주어진 incumbent에서 ALNS(seed) + 선호 polish + 교환 swap + 중재.
 
     feasible하면 (obj, solution_dict), 아니면 None. committed/loads를 in-place로 변형하므로
     호출자(메인/워커)마다 자기 복사본이어야 한다 -- 워커는 fork COW가 그 격리를 보장한다.
     모든 마감은 공유 벽시계 t0 기준이라 시드마다 같은 절대 예산을 쓴다. 시드로 갈리는
     유일한 단계는 ALNS이고, 거기서 best-of-seeds의 분산이 난다.
+
+    light=True면 ALNS·polish를 건너뛰고 incumbent를 바로 마감(operations+check)한다. 대형
+    relax 자식 전용 -- relax_repair가 늦게(~0.74·tl) 끝나는데 ALNS·polish·900블록 check 꼬리가
+    return_cap(0.93·tl)을 넘겨 자식이 *결과 쓰기 직전에 죽던* 버그(측정: 381M 만들고도 56.7s>56s에
+    소멸)를 막는다. 대형서 ALNS는 inert(+0.2%)라 잃는 품질은 무시 가능하고, 얻는 건 relax가
+    실제로 −42%를 *전달*하는 것이다(features/14 후속).
     """
     name = prob_info.get("name", "?")
     blocks_data = prob_info["blocks"]
@@ -398,13 +418,13 @@ def _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed, verbose=F
     # (feasibility-first). 이 함수는 (fork 가능한 환경에선) 항상 자식 프로세스에서 돈다 --
     # 그래서 여기서 어떤 tail이 지연돼도 메인의 벽시계는 묶이지 않는다.
     try:
-        if time.time() - t0 < timelimit * 0.83:
+        if not light and time.time() - t0 < timelimit * 0.83:
             rng = random.Random(seed)
             snap, _, _ = alns(prob_info, ir, committed, loads, bw,
                               t0 + timelimit * 0.83, rng, cand="blf")
             committed = snap
             loads = loads_from_committed(committed, blocks_data, len(prob_info["bays"]))
-        if time.time() - t0 < timelimit * 0.88:
+        if not light and time.time() - t0 < timelimit * 0.88:
             pdl = t0 + timelimit * 0.88
             pref_polish(ir, prob_info, committed, loads, bw, w1, w2, w3, pdl)
             pref_swap(ir, prob_info, committed, loads, bw, w1, w2, w3, pdl)
@@ -436,12 +456,19 @@ def _full_body(ir, prob_info, t0, timelimit, seed):
 def _relax_body(ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
     """relax-repair 워커: CP 코어 스케줄 → 크레인-repair base 위에서 _improve. relax_repair가
     None이면(ortools無·CP실패) 표준 구성으로 폴백 -- relax는 *순수 추가*(best-of가 무회귀 보장)."""
-    cpw = int(os.environ.get("OGC_CP_WORKERS", "0") or "0") or cp_workers  # 실험 노브(기본 0=nw)
+    # 대형(n>350, train≤300 무영향): CP workers=1로 oversubscription 완화. 4자식×4워커=16스레드가
+    # 4코어를 넘겨 CP를 굶기고 blf repair를 늦췄다(측정 full-algo 658→568M). 작은 인스턴스는
+    # nw(=4) 그대로 -- train-튜닝 cp=4 최적([[quality-levers-measured-ceiling]])을 보존한다.
+    big = len(prob_info.get("blocks", [])) > 350
+    default_w = 1 if big else cp_workers
+    cpw = int(os.environ.get("OGC_CP_WORKERS", "0") or "0") or default_w  # 실험 노브(기본 0=auto)
     rr = relax_repair(ir, prob_info, t0, timelimit, cp_cap=cp_cap, workers=cpw)
     if rr is None:
         return _full_body(ir, prob_info, t0, timelimit, seed)
     committed, loads, bw = rr
-    return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+    # 대형서 relax_repair는 늦게 끝나(blf ~0.74·tl) ALNS·polish 꼬리가 return_cap을 넘긴다 --
+    # light로 base를 바로 마감해 relax가 결과를 *제때 쓰게* 한다(ALNS 대형서 inert).
+    return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed, light=big)
 
 
 def _obj3_body(ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
@@ -454,10 +481,23 @@ def _obj3_body(ir, prob_info, t0, timelimit, seed, cp_cap, cp_workers):
     return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
 
 
+def _cengine_body(ir, prob_info, t0, timelimit, seed):
+    """C scan 엔진 자식: 동봉 정적 바이너리가 native 비트마스크로 scan 구성을 ~19× 빠르게 완주해
+    (obj, solution) 반환. 대형-혼잡서 Python scan이 못 끝내던 339M 품질을 60초 안에 낸다
+    (features/18). C는 Python scan의 byte-identical 복제(train 10개 확인). 실패(바이너리 부재·
+    파싱·infeasible·예외) 시 표준 Python 경로로 폴백 -- *순수 추가*(best-of 무회귀, floor 최후보루)."""
+    res = run_c_engine(ir, prob_info, timeout=max(5.0, timelimit))
+    if res is None:
+        return _full_body(ir, prob_info, t0, timelimit, seed)
+    return res  # (objective, solution_dict) -- 대형서 ALNS inert이라 base를 바로 쓴다
+
+
 def _child_body(i, ir, prob_info, t0, tl, base, special, cp_cap, nw):
-    """자식 i가 실행할 본체. 자식 0이 special('relax'/'obj3')이면 그 전용 base, 아니면 표준.
-    relax(obj1-지배)·obj3(obj3-지배)는 상호배타(인스턴스 통계로 게이트). 예외엔 None."""
+    """자식 i가 실행할 본체. 자식 0이 special('cengine'/'relax'/'obj3')이면 그 전용, 아니면 표준.
+    상호배타(인스턴스 통계로 게이트). 예외엔 None."""
     try:
+        if i == 0 and special == "cengine":
+            return _cengine_body(ir, prob_info, t0, tl, base + i)
         if i == 0 and special == "relax":
             return _relax_body(ir, prob_info, t0, tl, base + i, cp_cap, nw)
         if i == 0 and special == "obj3":
@@ -697,7 +737,12 @@ def algorithm(prob_info, timelimit=60):
         util = _utilization(prob_info)
         special = None
         if nw >= 2 and tl >= 30.0 and not os.environ.get("OGC_NO_SPECIAL"):
-            if _RELAX_OK and util >= 0.45 and not os.environ.get("OGC_NO_RELAX"):
+            if n > 350 and _CENGINE_OK and not os.environ.get("OGC_NO_CENGINE"):
+                special = "cengine"  # ★대형(train≤300 너머): C scan 엔진이 Python scan을 19× 빠르게
+                #   완주해 60초 안에 339M nesting 품질을 낸다(features/18). Python scan이 못 끝내
+                #   BLF base(655M)에 묶이던 단축-tl 대형-혼잡을 −48% 깬다. C=Python scan byte-identical
+                #   복제라 무회귀, 실패 시 표준/floor 폴백. n>350 게이트로 train(≤300)은 무영향.
+            elif _RELAX_OK and util >= 0.45 and not os.environ.get("OGC_NO_RELAX"):
                 special = "relax"   # obj1(지각) 전역 스케줄 레버(CP 코어 → nesting repair)
             elif _OBJ3_OK and util < 0.25 and os.environ.get("OGC_USE_OBJ3"):
                 special = "obj3"    # ★기본 OFF 유지(v1.3.0 순위시뮬 재기각). 게이트는 0.45→0.25로

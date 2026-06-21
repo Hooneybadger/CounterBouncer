@@ -43,3 +43,15 @@
 
 한계는 정직하게 적는다. 이 가속은 *반복을 늘리고 구성을 안정화할 뿐, 이동의 질을 바꾸지 않는다.* [P5a](./07-lower-bound.md)가 가리킨 진짜 병목 — prob_38은 1800초·30배 예산에도 obj1=5129로 정체 — 은 이걸로 안 풀린다. 큰 인스턴스의 지각은 *반복 수*가 아니라 *이동의 질*(어디를 뜯어 어디에 넣느냐)이 병목이기 때문이다. 그래서 이 가속은 끝이 아니라 다음 레버, 곧 타깃 repair와 더 똑똑한 destroy/repair 연산자를 위한 더 빠르고 안정된 바닥이다. repair가 빨라지면 그 새 이동들이 더 많이 시도된다.
 
+## 후속: feasible_positions 행 단위 + 더 빠른 엔진의 한계
+
+[scale-construction 병목](../STRATEGY_PLAN.md)의 "더 빠른 배치 엔진" 이니셔티브로 [전 위치 스캔](../GLOSSARY.md) `feasible_positions`(cProfile cumtime 65%)을 공략했다. 원본은 위치마다 베이 크기(W·H비트) 정수를 시프트했는데, occ를 레이어별 H개 행 정수(각 W비트)로 한 번 뽑아 두고(`BayOccupancy.upper_rows()` 캐시) 위치마다 블록의 *행들*만 W-크기로 시프트-AND 하게 바꿨다(`raster_engine.py`의 `feasible_positions`, 원본은 `_feasible_positions_ref`로 보존). 작은 정수 연산이 큰정수 할당을 피한다. [차등검증](../GLOSSARY.md)(`OGC_FP_VERIFY`)으로 *행단위 == 원본 집합*을 실제 construct에서 증명했고(train 8개 scan obj byte-identical·prob_40 per-call 무불일치), 그래서 게이트 없이 전역 채택했다 — 출력 불변, 가속만.
+
+효과는 정직히 **marginal**이다. `feasible_positions` 단독은 혼잡 베이서 ~1.3×지만, construct 전체로는 ~1.1×다(900블록 scan 134.6→122.6초) — 후보-시각 루프·occ 빌드·entry/exit 재검사가 희석한다. 더 중요한 결론: **순수 파이썬으로는 2~3×가 안 나온다.** 원본이 이미 비트병렬(레이어당 64셀/워드)+early-break라, 행단위·numpy slice-sum(원소 폭증)·타깃 후보(blfnest, 아래)가 다 1.1~1.3× 안에 묶인다. 60초/900블록에서 scan 품질(339M)에 닿으려면(122초→<48초) 범주적으로 다른 엔진 — jagua-rs류 quadtree+poles surrogate의 *증분* 충돌검출([V2_DESIGN](../V2_DESIGN.md)) — 이 필요하고, 그건 Rust 정적 바이너리라 서버 OS/arch 호환을 *제출 전 확인 불가*([§6](../../CLAUDE.md))라 submittable-safe 범위 밖이다. 측정으로 확정한 천장이다.
+
+기각한 곁가지 하나도 적는다 — **타깃 nesting 후보**(`blfnest`: 앵커의 레이어별 모서리로 오버행 그늘 자리를 직접 생성, features/05가 명명). 900블록서 blf(379M)와 scan(339M) 사이 366M로 *일부* nesting을 잡았으나, nesting 자리가 앵커-가장자리에 정렬되지 않아 scan의 339M엔 못 닿고 후보가 늘어 blf보다 느렸다(75s vs 55s). ⇒ 전수 스캔의 exhaustiveness는 타깃 후보로 대체되지 않는다. 코드 되돌림, 발견만 남긴다.
+
+## 후속: 폴백의 O(m²) 제거
+
+숨김 P3(혼잡 ~900블록, [STRATEGY_PLAN](../STRATEGY_PLAN.md) 단축-tl 병목 항목)을 파다 같은 계열의 낭비를 하나 더 잡았다. 구성기의 폴백 `_fallback_place`(`src/constructor.py`)는 [scan](./05-temporal-nesting.md)이 어떤 자리도 못 찾을 때 빈-베이 윈도우로 안전 배치하는데, 그 entry를 baseline의 `_empty_bay_entry`로 구했다 — while-changed 재시작이라 베이당 O(m²)다. floor는 이미 이걸 정렬+단일패스 O(m)(`_empty_bay_entry_fast`)로 고쳤는데([features/01](./01-feasibility-first-wrapper.md)·v1.1), 구성기 폴백만 빠져 있었다. 혼잡 인스턴스에서 폴백이 자주 발동해(600블록 프로파일 2.16초) 구성 [throughput](../GLOSSARY.md)을 갉아먹던 자리다. 같은 정렬+O(m)으로 바꿨다. [feasibility](../GLOSSARY.md)는 구조적으로 안전하다 — 완주 시 출력이 바이트 동일이고(train 4개+혼잡 900블록 obj 일치로 확인), [fast-finish](../GLOSSARY.md) 시엔 deadline 전 더 많은 블록을 실제 배치해 obj가 약단조로 *개선*된다(900블록 60초 fast-finish에서 3.045→3.030억). 단축-tl headline(60초 큰 인스턴스는 BLF base에 묶임)을 바꾸진 못하는 잠재-quadratic 강건화이며, 그 headline을 깰 *scan 완주 가속*은 비등가 레버라 별도 스코프다(STRATEGY 단축-tl 병목 항목).
+

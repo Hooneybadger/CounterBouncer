@@ -22,10 +22,11 @@ import time
 
 try:  # flat layout
     from utils import _resolve_layers
-    from constructor import _best_in_bay, _rel_bbox, loads_from_committed
+    from constructor import _best_in_bay, _rel_bbox, loads_from_committed, _fallback_place
 except ImportError:  # IDE package layout
     from ogc2026.baseline.utils import _resolve_layers
-    from ogc2026.src.constructor import _best_in_bay, _rel_bbox, loads_from_committed
+    from ogc2026.src.constructor import (
+        _best_in_bay, _rel_bbox, loads_from_committed, _fallback_place)
 
 try:
     from ortools.sat.python import cp_model
@@ -126,12 +127,16 @@ def solve_core_schedule(prob_info, core_ids, time_cap, workers):
     return {g: (int(solver.Value(B[g]["Bv"])), int(solver.Value(B[g]["entry"]))) for g in gids}
 
 
-def _repair_from_schedule(prob_info, ir, sched, honor_entry):
+def _repair_from_schedule(prob_info, ir, sched, honor_entry, cand="scan", deadline=None):
     """CP 스케줄(코어의 베이+entry)을 래스터 엔진으로 크레인-repair. committed(구성기 형식) 반환.
 
-    CP entry 오름차순으로 코어를 CP-베이에 _best_in_bay(scan=nesting)로 배치. honor_entry면 CP
+    CP entry 오름차순으로 코어를 CP-베이에 _best_in_bay(cand)로 배치. honor_entry면 CP
     entry를 하한으로 써 타이밍 존중. 코어 밖 블록은 EDD로 둘러 배치. 어떤 베이도 안 되면 다른
     베이/release 하한으로 폴백 -- feasibility는 _best_in_bay의 양방향 크레인 검사가 보장한다.
+
+    cand -- 위치 후보 모드. "scan"(nesting, 느림)이 기본. 대형 인스턴스에선 "blf"(코너,
+    빠름)로 호출해 repair가 예산 안에 *완주*하게 한다 -- CP 스케줄(전역 순서)이 품질의 핵심이고
+    nesting은 부차적이라, 완주 못 하는 scan보다 완주하는 blf가 대형서 낫다(features/14 후속).
     """
     blocks = prob_info["blocks"]
     nb = len(prob_info["bays"])
@@ -139,24 +144,40 @@ def _repair_from_schedule(prob_info, ir, sched, honor_entry):
     order = sorted(sched.keys(), key=lambda g: sched[g][1])
     rest = [i for i in range(len(blocks)) if i not in sched]
     rest.sort(key=lambda i: (blocks[i]["due_date"], blocks[i]["processing_time"]))
-    for gid in order + rest:
+    past = False
+    for idx, gid in enumerate(order + rest):
         blk = blocks[gid]
         proc = int(blk["processing_time"])
         rel = int(blk["release_time"])
+        # 하드 바운드: deadline을 넘기면 남은 블록을 _fallback_place(빈-베이 윈도우, cand-time
+        # 루프 없는 O(베이·방향))로 마감한다. blf repair는 O(n²) cand-time이라 대형서 늘어질 수
+        # 있는데, CP 코어가 order 앞쪽이라 중요한 블록은 이미 받았고 꼬리만 값싼 보장 배치로
+        # 떨어뜨려 relax 자식이 반드시 return_cap 전에 끝나게 한다. deadline=None이면 발동 안 함.
+        if deadline is not None and not past and idx % 32 == 0 and time.time() > deadline:
+            past = True
+        if past:
+            prefs = blk.get("bay_preferences") or [0.0] * nb
+            b, px, py, orient, e, ex = _fallback_place(
+                ir, blk, prob_info["bays"], committed, prefs, rel, proc)
+            rb = _rel_bbox(ir, gid, orient)
+            committed[b].append({"bay": b, "bid": gid, "orient": orient, "px": px, "py": py,
+                                 "entry": e, "exit": ex, "masks": ir.masks(gid, orient),
+                                 "wbb": (px + rb[0], py + rb[1], px + rb[2], py + rb[3])})
+            continue
         in_core = gid in sched
         lo = max(rel, sched[gid][1]) if (in_core and honor_entry) else rel
         pref_bay = sched[gid][0] if in_core else None
         bays_try = ([pref_bay] + [b for b in range(nb) if b != pref_bay]) if pref_bay is not None else list(range(nb))
         best = None
         for b in bays_try:
-            r = _best_in_bay(ir, b, committed[b], gid, lo, proc, "scan")
+            r = _best_in_bay(ir, b, committed[b], gid, lo, proc, cand)
             if r is not None and (best is None or r[0] < best[0]):
                 best = (r[0], b, r)
             if pref_bay is not None and b == pref_bay and r is not None:
                 break  # 선호 베이에 들어가면 그대로(스케줄 존중)
         if best is None and lo > rel:  # honor_entry 완화 재시도
             for b in bays_try:
-                r = _best_in_bay(ir, b, committed[b], gid, rel, proc, "scan")
+                r = _best_in_bay(ir, b, committed[b], gid, rel, proc, cand)
                 if r is not None and (best is None or r[0] < best[0]):
                     best = (r[0], b, r)
         if best is None:
@@ -179,6 +200,12 @@ def relax_repair(ir, prob_info, t0, timelimit, cp_cap=8.0, workers=4, congest_n=
         return None
     blocks = prob_info["blocks"]
     n_bays = len(prob_info["bays"])
+    # 대형(train≤300 너머)서만 예산-적응. blf repair가 O(n²) cand-time 루프라 900블록서 ~45s라,
+    # CP를 조여(timelimit·0.07) repair·check에 예산을 양보한다 -- CP 코어는 60블록뿐이라 짧은
+    # cap에도 풀린다(측정: 2s). 작은 인스턴스는 cp_cap·scan·2변형 그대로(byte-identical).
+    big = len(blocks) > 350
+    if big:
+        cp_cap = min(cp_cap, timelimit * 0.07)
     order = sorted(range(len(blocks)), key=lambda i: (blocks[i]["release_time"], blocks[i]["due_date"]))
     core = order[:min(congest_n, len(order))]
     sched = solve_core_schedule(prob_info, core, cp_cap, workers)
@@ -191,11 +218,28 @@ def relax_repair(ir, prob_info, t0, timelimit, cp_cap=8.0, workers=4, congest_n=
     avg = sum(bay_areas) / n_bays
     bw = [avg / a for a in bay_areas]
 
-    # 두 repair 변형(타이밍 존중 / release 우선)의 best -- CP 최적해가 유일치 않아 변형마다 갈린다.
+    # 예산-적응 repair (대형 인스턴스 전용). scan repair(2변형, deadline無)는 큰 인스턴스서
+    # 예산을 한참 넘긴다(900블록 scan 134s vs blf 42s) -- 60초에 완주 못 해 relax 자식이
+    # 통째로 죽고, 입증된 CP 스케줄 이득이 통째로 버려졌다(측정: 표준 655M, relax-scan 미완주).
+    # train(≤300) 최대 너머인 n>350에서만(=train 바이트동일 보장, 무회귀 구조적) repair를
+    # *완주하는* blf로 바꾼다 -- CP 스케줄(전역 순서)이 품질의 핵심이라 nesting은 부차적이고,
+    # 완주한 blf(381M)가 미완주 scan(0 기여)을 압도한다(단축-tl 900블록 655M→~381M). 장기-tl
+    # 에선 표준 scan 자식이 339M로 완주해 best-of로 relax를 이기므로 relax=blf가 무해하다.
+    # 작은 인스턴스는 scan·2변형 그대로라 *동작 무변*(features/14 후속, scale-construction 병목).
+    repair_cand = "blf" if big else "scan"
+    # 대형은 blf 1변형만(honor=True). 2변형(85s)은 예산을 넘겨 relax 자식이 결과를 못 쓴다.
+    # repair_deadline을 넘기면 _repair_from_schedule이 남은 블록을 _fallback_place(O(1)-ish)로
+    # 마감해 *하드 바운드* -- relax 자식이 무슨 일이 있어도 return_cap 전에 결과를 쓰게 한다.
+    # 작은 인스턴스는 scan·2변형·deadline=None 그대로(byte-identical).
+    honors = (True,) if big else (True, False)
+    # deadline을 당겨(0.72) 경합 하에서도 매 런 *확실히* 완주하게 한다 -- 0.82는 56s cap에 너무
+    # 붙어 relax 자식이 ~1/3만 완주(나머지 killed→표준)했다. 0.72면 repair+check가 ~0.78에
+    # 끝나 best-of가 매번 relax를 거둔다(per-run obj는 _fallback 꼬리로 약간↑, 대신 신뢰성).
+    repair_deadline = (t0 + timelimit * 0.72) if big else None
     from constructor import solution_obj
     best = None
-    for honor in (True, False):
-        committed = _repair_from_schedule(prob_info, ir, sched, honor)
+    for honor in honors:
+        committed = _repair_from_schedule(prob_info, ir, sched, honor, repair_cand, repair_deadline)
         loads = loads_from_committed(committed, blocks, n_bays)
         obj = solution_obj(committed, blocks, bw, loads, w1, w2, w3)
         if best is None or obj < best[0]:

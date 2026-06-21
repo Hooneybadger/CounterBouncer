@@ -37,7 +37,7 @@ import time
 
 try:  # flat layout: evaluation server / batch_runner
     from utils import Bay
-    from baseline_greedy import _empty_bay_entry, _block_bbox, _build_operations
+    from baseline_greedy import _block_bbox, _build_operations
     from raster_engine import (
         InstanceRaster, BayOccupancy, entry_feasible, exit_feasible,
         feasible_positions,
@@ -45,7 +45,7 @@ try:  # flat layout: evaluation server / batch_runner
 except ImportError:  # IDE package layout
     from ogc2026.baseline.utils import Bay
     from ogc2026.baseline.baseline_greedy import (
-        _empty_bay_entry, _block_bbox, _build_operations,
+        _block_bbox, _build_operations,
     )
     from ogc2026.src.raster_engine import (
         InstanceRaster, BayOccupancy, entry_feasible, exit_feasible,
@@ -787,6 +787,22 @@ def pref_swap(ir, prob_info, committed, bay_loads, bay_weights,
     return swaps
 
 
+def _empty_bay_entry_fast(sorted_slots, r_time: int, proc: int) -> int:
+    """`baseline_greedy._empty_bay_entry`와 *동일한 값*을 O(m)에 돌려준다 -- 단 slots가
+    시작시각 오름차순이어야 한다(호출부가 sorted로 보장). baseline의 while-changed
+    재시작(O(m²))을 단일 패스로 바꾼다 -- floor가 이미 쓰던 가속(myalgorithm._empty_bay_entry_fast)을
+    구성기 폴백에도 적용. 정렬되면 entry를 앞으로만 밀며 한 번 훑어 같은 결과를 낸다.
+    혼잡 인스턴스에서 _fallback_place가 자주 발동하는데 원본이 O(m²)라 구성 throughput을
+    갉아먹었다(프로파일 2.16s). 출력 불변(바이트동일)이라 무회귀가 구조적으로 보장된다."""
+    entry = int(r_time)
+    for a, e in sorted_slots:
+        if a >= entry + proc:
+            break
+        if entry < e:
+            entry = e
+    return entry
+
+
 def _fallback_place(ir, blk, bays_data, committed, prefs, r_time, proc):
     """빈-베이 윈도우 보장 배치(P1 _guaranteed_place 정신). 항상 feasible.
 
@@ -794,7 +810,8 @@ def _fallback_place(ir, blk, bays_data, committed, prefs, r_time, proc):
     체류구간이 다른 어떤 committed와도 겹치지 않으므로 placed 블록과 상호작용이 없다.
     """
     n_bays = len(bays_data)
-    schedules = [[(c["entry"], c["exit"]) for c in committed[j]] for j in range(n_bays)]
+    # 시작시각 정렬로 만들어 _empty_bay_entry_fast(O(m))를 쓴다(원본 O(m²) 대체, 값 동일).
+    schedules = [sorted((c["entry"], c["exit"]) for c in committed[j]) for j in range(n_bays)]
     blk_data = blk
     best = None  # (key, bay_id, orient, px, py, entry)
     n_orient = len(blk_data["shape"])
@@ -810,7 +827,7 @@ def _fallback_place(ir, blk, bays_data, committed, prefs, r_time, proc):
             py = max(0, math.ceil(-bb[1]))
             if px + bb[2] > W + _EPS or py + bb[3] > H + _EPS:
                 continue
-            entry = _empty_bay_entry(schedules[bay_id], r_time, proc)
+            entry = _empty_bay_entry_fast(schedules[bay_id], r_time, proc)
             pref = prefs[bay_id] if bay_id < len(prefs) else 0.0
             key = (entry, -pref)
             if best is None or key < best[0]:
@@ -821,7 +838,7 @@ def _fallback_place(ir, blk, bays_data, committed, prefs, r_time, proc):
         bb = _block_bbox(blk_data, 0)
         px = max(0, math.ceil(-bb[0]))
         py = max(0, math.ceil(-bb[1]))
-        entry = _empty_bay_entry(schedules[bay_id], r_time, proc)
+        entry = _empty_bay_entry_fast(schedules[bay_id], r_time, proc)
         return bay_id, px, py, 0, entry, entry + proc
     _, bay_id, orient, px, py, entry = best
     return bay_id, px, py, orient, entry, entry + proc

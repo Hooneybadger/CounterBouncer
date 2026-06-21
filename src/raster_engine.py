@@ -31,6 +31,11 @@
 from __future__ import annotations
 
 import math
+import os
+
+# feasible_positions 차등검증 스위치(기본 OFF). 켜면 행단위 결과를 원본(big-int) ref와
+# 대조해 불일치 시 AssertionError -- 채택 전 등가 증명용(OGC_ALNS_VERIFY와 같은 관례).
+_FP_VERIFY = bool(os.environ.get("OGC_FP_VERIFY"))
 
 try:  # flat layout: evaluation server / batch_runner
     from utils import _poly_from_verts, _resolve_layers
@@ -221,7 +226,7 @@ class BayOccupancy:
     위치마다 shift+AND 만 한다 -- 베이스라인 대비 가속의 원천.
     """
 
-    __slots__ = ("W", "H", "R", "nlayers", "occ", "_upper")
+    __slots__ = ("W", "H", "R", "nlayers", "occ", "_upper", "_upper_rows")
 
     def __init__(self, width: int, height: int, nlayers: int):
         self.W = int(width)
@@ -230,10 +235,12 @@ class BayOccupancy:
         self.nlayers = max(1, int(nlayers))
         self.occ = [0] * self.nlayers
         self._upper = None
+        self._upper_rows = None
 
     def clear(self):
         self.occ = [0] * self.nlayers
         self._upper = None
+        self._upper_rows = None
 
     def add(self, masks, px: int, py: int):
         """블록(레이어별 LayerMask 리스트)을 (px,py)에 OR-누적."""
@@ -244,6 +251,7 @@ class BayOccupancy:
             shift = (py + lm.my0) * R + (px + lm.mx0)
             self.occ[j] |= lm.int_for_R(R) << shift
         self._upper = None
+        self._upper_rows = None
 
     def upper(self):
         """upper[k] = OR_{j>=k} occ[j]. 게으른 캐시."""
@@ -255,6 +263,24 @@ class BayOccupancy:
                 up[k] = acc
             self._upper = up
         return self._upper
+
+    def upper_rows(self):
+        """upper[k]를 레이어별 H개 행 정수(각 W비트)로 분해한 것. 게으른 캐시 -- 같은 occ에
+        feasible_positions를 방향마다 부를 때 행 추출을 한 번만 한다(방향당 재추출 제거)."""
+        if self._upper_rows is None:
+            up = self.upper()
+            R = self.R
+            Rmask = (1 << R) - 1
+            rows = []
+            for k in range(self.nlayers):
+                v = up[k]
+                rk = []
+                for _y in range(self.H):
+                    rk.append(v & Rmask)
+                    v >>= R
+                rows.append(rk)
+            self._upper_rows = rows
+        return self._upper_rows
 
     # -- 질의 -----------------------------------------------------------------
     def _overlap_any(self, layer_maps, masks, px: int, py: int) -> bool:
@@ -322,12 +348,10 @@ def no_collision(ir: InstanceRaster, occ: BayOccupancy, bay_id: int,
     return not occ._collide_same_layer(masks, px, py)
 
 
-def feasible_positions(ir: InstanceRaster, occ: BayOccupancy, bay_id: int,
-                       block_id: int, orient: int):
-    """전 위치 스캔: 이 (베이,블록,방향)이 entry-feasible 한 모든 (px,py).
-
-    IFP 정수 직사각형 안의 모든 위치를 크레인 질의로 거른다. 반환은 (px,py) 리스트.
-    BLF 후보 생성에 직접 쓰인다(P3). 정확도 우선, 속도는 P3에서 최적화.
+def _feasible_positions_ref(ir: InstanceRaster, occ: BayOccupancy, bay_id: int,
+                            block_id: int, orient: int):
+    """원본 big-int 전 위치 스캔(차등검증 기준). 위치마다 베이 크기 정수를 시프트한다.
+    `feasible_positions`(행단위)가 이것과 *동일 집합*을 더 빠르게 내는지 OGC_FP_VERIFY로 대조.
     """
     bb = ir.local_bbox(block_id, orient)
     ref = ir._ref(block_id, orient)
@@ -360,4 +384,57 @@ def feasible_positions(ir: InstanceRaster, occ: BayOccupancy, bay_id: int,
                     break
             if not blocked:
                 out_append((px, py))
+    return out
+
+
+def feasible_positions(ir: InstanceRaster, occ: BayOccupancy, bay_id: int,
+                       block_id: int, orient: int):
+    """전 위치 스캔(행 단위): 이 (베이,블록,방향)이 entry-feasible 한 모든 (px,py).
+
+    원본(`_feasible_positions_ref`)은 위치마다 베이 크기(W·H비트) 정수를 시프트했는데, 여기선
+    occ를 레이어별 H개 행 정수(각 W비트)로 한 번 뽑아 두고, 위치마다 블록의 *행들*만 W-크기로
+    시프트-AND 한다. 작은 정수 연산이라 큰정수 할당 비용을 피해 ~1.3× 빠르다(혼잡 베이 측정).
+    출력은 원본과 *동일 집합*(차등검증 byte-identical, OGC_FP_VERIFY) -- 가속만 한다.
+    """
+    bb = ir.local_bbox(block_id, orient)
+    ref = ir._ref(block_id, orient)
+    W = ir.bay_w[bay_id]
+    H = ir.bay_h[bay_id]
+    px_lo = max(0, math.ceil(-(bb[0] - ref[0])))
+    px_hi = math.floor(W - (bb[2] - ref[0]))
+    py_lo = max(0, math.ceil(-(bb[1] - ref[1])))
+    py_hi = math.floor(H - (bb[3] - ref[1]))
+    if px_hi < px_lo or py_hi < py_lo:
+        return []
+    masks = ir.masks(block_id, orient)
+    up_rows = occ.upper_rows()   # 레이어별 H개 행 정수(캐시 -- 방향마다 재추출 안 함)
+    nmaps = len(up_rows)
+    # 레이어별: occ 행(W-크기) H개 + 블록의 비어있지 않은 행들[(world-row Δ, row_int)].
+    layer_data = []
+    for k, lm in enumerate(masks):
+        if lm.empty or k >= nmaps:
+            continue
+        brows = [(lm.my0 + ri, rint) for ri, rint in enumerate(lm.row_ints) if rint]
+        if brows:
+            layer_data.append((lm.mx0, brows, up_rows[k]))
+    out = []
+    out_append = out.append
+    for px in range(px_lo, px_hi + 1):
+        for py in range(py_lo, py_hi + 1):
+            blocked = False
+            for (mx0, brows, occ_rows) in layer_data:
+                sh = px + mx0
+                for (dy, rint) in brows:
+                    wr = py + dy
+                    if 0 <= wr < H and (rint << sh) & occ_rows[wr]:
+                        blocked = True
+                        break
+                if blocked:
+                    break
+            if not blocked:
+                out_append((px, py))
+    if _FP_VERIFY:  # 채택 전 등가 증명: 행단위 == 원본 big-int 집합
+        ref = _feasible_positions_ref(ir, occ, bay_id, block_id, orient)
+        assert sorted(out) == sorted(ref), \
+            f"FP mismatch bay={bay_id} blk={block_id} o={orient}: rb={len(out)} ref={len(ref)}"
     return out
