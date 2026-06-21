@@ -46,6 +46,20 @@ P1 안전망의 직렬 배치는 feasible하지만 지각이 폭발한다(합계
 
 [polish·swap](./features/09-preference-polish.md)은 ALNS 뒤에서 *엄밀 개선만 수락하는* 결정적 국소탐색이라 [무회귀](./GLOSSARY.md)가 구조적으로 보장된다. [포트폴리오](./features/10-seed-portfolio.md)는 노는 코어 셋에 시드를 흩뿌려 ALNS의 큰 분산(prob_16 spread 37.7%)을 활용한다. best-of가 시드 0(옛 단일 실행)을 포함하니 저경합 서버에선 손해가 없다.
 
+## 3.5 C 엔진과 순서 포트폴리오 — "obj1 천장"의 재발견
+
+제출 피드백상 ~30위라는 사실이 "obj1은 측정 천장"이라는 우리 결론을 반증했다 — 29팀이 앞선다는 건 헤드룸이 실재한다는 뜻이고, 그 "천장"은 *우리 도구함의 한계*였다([하한](./features/07-lower-bound.md)이 느슨해 진짜 천장을 못 박는다). 두 곳에서 천장을 깼다. **(1) C scan 엔진([features/18](./features/18-c-scan-engine.md))** — Python scan을 native u64로 byte-identical·~19× 복제해, 단축-tl 대형-혼잡(P3류, n≈900)이 못 끝내던 scan 완주를 60초 안에 해낸다(합성 900블록 혼잡 655M→339M, −48%). **(2) 순서 포트폴리오([features/19](./features/19-order-portfolio.md))** — 그 C 속도로 *한 호출에 수천 개 구성 순서*를 배치 평가해 best를 골라 그 위에 [ALNS](./features/06-alns.md)를 얹는다. 구성 순서가 소형~중형 obj를 지배하는데 EDD+ALNS는 그 공간을 안 봐 헤드룸을 흘렸다.
+
+| 측정 | OFF(포트폴리오 없음) | ON | 비고 |
+|---|---|---|---|
+| n≤250 전체 36개 합(1개씩) | 214,345,123 | **205,393,381 (−4.2%)** | **26승 / 9무 / 1패**(prob_27 −1.0%) |
+| 고-obj 20개(prob_21~40, rank 지배) | 213,284,352 | **204,491,929 (−4.1%)** | 16/20 승 |
+| 최대 윈 | — | — | prob_1 +80.8%·prob_4 +69.7%·prob_14 +34.1%·prob_35 +34.0% |
+
+★**측정 방법론 — oversubscription 아티팩트.** 이 표는 전부 `systemd-run --user --scope -p CPUQuota=400%`·**1개씩**(서버=1인스턴스·4코어 전용 모델)이다. `batch_runner`의 *병렬* 실행은 포트폴리오 자식의 C 서브프로세스가 다른 자식을 굶겨 per-instance obj에 ±20~30% 노이즈를 실어, "회귀 13건"을 *허위로* 만들었다(예: 포트폴리오를 안 쓰는 n=300 경로의 prob_20이 +20%로 뜸). 1개씩 재측정하니 그 13건 중 12건이 승·tie였고 진짜 회귀는 prob_27(−1.0%) 하나뿐이다([THROTTLE_MEASUREMENT](../learning/THROTTLE_MEASUREMENT.md)). 교훈: 동시 실행 측정은 feasibility·순위 *방향*엔 쓰되 per-instance obj 결정엔 못 쓴다.
+
+통합은 *크기 하드 분기가 아니라 [best-of](./GLOSSARY.md)*다(과적합 금지) — `n≤250`이면 자식 0을 포트폴리오로, 혼잡(util≥0.45)이면 자식 1에 [relax](./features/14-relax-repair.md)를 *함께* 띄워, 포트폴리오가 진 인스턴스에서도 다른 자식이 거둔다. `n>350`은 검증된 cengine 단독을 유지하고, `250<n≤350`은 표준 경로 그대로다. feasibility는 40/40 invalid 0(60초 전수 2회)·[supervisor floor](./features/11-supervisor-feasibility.md)로 −1 불가.
+
 ## 4. 천장 — 우리가 최적에 얼마나 가까운가
 
 자기 과거 버전이 아니라 절대 기준으로도 쟀다([07](./features/07-lower-bound.md)). obj1(지각)의 [면적완화 cumulative 하한](./GLOSSARY.md)을 CP-SAT로 풀었더니 **40개 전부 ≈0(non-binding)**, 그중 **18/40은 우리 obj1이 이미 0이라 증명된 최적**이다. 지배 목적을 절반 가까이에서 최적으로 풀었다는 뜻이다. 남은 지각은 자원이 아니라 [2D 기하·크레인 j≥k](./GLOSSARY.md)에서 오고, 그래서 [nesting](./features/05-temporal-nesting.md)·블록 이동이 옳은 레버였다. prob_38·40 같은 큰 인스턴스는 그 기하 국소 최적에 묶여 가속·포트폴리오·scan-repair 어느 것도 크게 못 깬다(아래 5절). 다만 1800초에선 탐색이 더 진행돼(prob_27 −6.5%, prob_20 −15%) 긴 제한시간의 여지는 남는다.
@@ -94,4 +108,6 @@ v1.0.1이 메인의 무거운 일을 자식으로 뺐지만 **floor만은 메인
 | 08 | repair 가속 | [08](./features/08-repair-acceleration.md) |
 | 09 | 선호 재배치·교환 polish | [09](./features/09-preference-polish.md) |
 | 10 | 4코어 시드 포트폴리오 | [10](./features/10-seed-portfolio.md) |
+| 18 | C scan 엔진(대형-혼잡 −48%) | [18](./features/18-c-scan-engine.md) |
+| 19 | 순서 포트폴리오(소형~중형 −4.2%·n=100 +80%) | [19](./features/19-order-portfolio.md) |
 

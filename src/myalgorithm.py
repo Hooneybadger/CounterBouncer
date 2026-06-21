@@ -79,13 +79,15 @@ except Exception:
 # 돌려 60초 안에 339M 품질을 완주한다(features/18). 바이너리 부재·실패 시 안전하게 None→폴백.
 try:
     try:
-        from c_engine import run_c_engine, c_engine_available
+        from c_engine import run_c_engine, run_portfolio, c_engine_available
     except ImportError:
-        from ogc2026.src.c_engine import run_c_engine, c_engine_available
+        from ogc2026.src.c_engine import run_c_engine, run_portfolio, c_engine_available
     _CENGINE_OK = c_engine_available()
 except Exception:
     _CENGINE_OK = False
     def run_c_engine(*a, **k):  # 폴백 스텁
+        return None
+    def run_portfolio(*a, **k):  # 폴백 스텁
         return None
 
 
@@ -492,22 +494,46 @@ def _cengine_body(ir, prob_info, t0, timelimit, seed):
     return res  # (objective, solution_dict) -- 대형서 ALNS inert이라 base를 바로 쓴다
 
 
-def _child_body(i, ir, prob_info, t0, tl, base, special, cp_cap, nw):
-    """자식 i가 실행할 본체. 자식 0이 special('cengine'/'relax'/'obj3')이면 그 전용, 아니면 표준.
-    상호배타(인스턴스 통계로 게이트). 예외엔 None."""
+def _portfolio_body(ir, prob_info, t0, timelimit, seed):
+    """순서 포트폴리오 자식: C가 수천 개 구성 순서를 배치로 돌려 내부 obj best를 고르고, 그
+    best 위에서 _improve(ALNS+polish). 소형~중형서 구성 순서가 obj를 지배하는데 EDD+ALNS는 그
+    공간을 안 봐 헤드룸을 흘린다 -- prob_1(n=100) 21,021→2,884(+86%, 포트폴리오 4,996 후 ALNS).
+    실패(바이너리·infeasible·예외) 시 표준 Python 경로로 폴백 -- *순수 추가*(best-of 무회귀).
+    feasibility는 _improve의 check_feasibility가 보증한다(infeasible이면 None→best-of가 무시)."""
+    n = len(prob_info.get("blocks", []))
+    port_s = max(2.0, timelimit * 0.45)          # C 배치 벽시계 -- 나머지는 _improve의 ALNS(≤0.83·tl)
+    n_orders = 8000 if timelimit >= 45 else (3000 if timelimit >= 20 else 1000)
+    if n > 200:
+        n_orders = min(n_orders, 4000)           # 큰 인스턴스는 순서당 construct가 비싸 적게
+    rr = run_portfolio(ir, prob_info, port_s=port_s, n_orders=n_orders, seed=seed,
+                       timeout=max(5.0, port_s + 30.0))
+    if rr is None:
+        return _full_body(ir, prob_info, t0, timelimit, seed)
+    committed, loads, bw = rr
+    return _improve(ir, prob_info, committed, loads, bw, t0, timelimit, seed)
+
+
+def _child_body(i, ir, prob_info, t0, tl, base, specials, cp_cap, nw):
+    """자식 i가 실행할 본체. specials[i]가 있으면 그 전용 경로, 아니면 표준 best-of-3+ALNS.
+    specials는 {자식인덱스: 'portfolio'/'cengine'/'relax'/'obj3'} (인스턴스 통계로 게이트).
+    여러 자식이 서로 다른 special을 동시에 돌 수 있다(예: 0=portfolio, 1=relax) -- best-of가
+    무회귀를 보장하므로 special은 모두 *순수 추가*다. 예외엔 None."""
     try:
-        if i == 0 and special == "cengine":
+        sp = specials.get(i)
+        if sp == "portfolio":
+            return _portfolio_body(ir, prob_info, t0, tl, base + i)
+        if sp == "cengine":
             return _cengine_body(ir, prob_info, t0, tl, base + i)
-        if i == 0 and special == "relax":
+        if sp == "relax":
             return _relax_body(ir, prob_info, t0, tl, base + i, cp_cap, nw)
-        if i == 0 and special == "obj3":
+        if sp == "obj3":
             return _obj3_body(ir, prob_info, t0, tl, base + i, cp_cap, nw)
         return _full_body(ir, prob_info, t0, tl, base + i)
     except Exception:
         return None
 
 
-def _run_forked(ir, prob_info, t0, tl, base, nw, special, cp_cap, return_cap):
+def _run_forked(ir, prob_info, t0, tl, base, nw, specials, cp_cap, return_cap):
     """raw os.fork() supervisor -- nw 자식을 띄워 결과를 임시파일로 수집. ★서버(daemon 프로세스)
     에서도 동작한다: multiprocessing.Process는 'daemonic processes are not allowed to have
     children'으로 막히지만 os.fork()는 OS 직접호출이라 통과한다(v1.1.0 P3 -1의 근본 수정 --
@@ -527,7 +553,7 @@ def _run_forked(ir, prob_info, t0, tl, base, nw, special, cp_cap, return_cap):
                 # ---- CHILD ---- COW 상속. 결과만 임시파일에. 파이썬 정리 건너뛰어(os._exit)
                 # 부모 상태(열린 fd·락) 오염 방지.
                 try:
-                    r = _child_body(i, ir, prob_info, t0, tl, base, special, cp_cap, nw)
+                    r = _child_body(i, ir, prob_info, t0, tl, base, specials, cp_cap, nw)
                     if r is not None:
                         with open(path + ".tmp", "wb") as f:
                             pickle.dump(r, f)
@@ -734,26 +760,38 @@ def algorithm(prob_info, timelimit=60):
         # obj3-지배 util≤0.42 vs obj1-지배 util≥0.42, 0.45가 깨끗한 분리선.
         # 자식 0에 special base를 줄지: 혼잡(obj1-지배)이면 relax, 비혼잡(obj3-지배)이면 obj3.
         # 둘은 상호배타 -- utilization으로 가른다(인스턴스 통계라 과적합 아님, 0.45 분리선).
+        # specials -- {자식인덱스: 전용경로}. 여러 자식이 서로 다른 special을 동시에 돌고 best-of가
+        # 무회귀를 보장하므로 special은 모두 *순수 추가*다(인스턴스 통계로 게이트, 과적합 금지).
         util = _utilization(prob_info)
-        special = None
-        if nw >= 2 and tl >= 30.0 and not os.environ.get("OGC_NO_SPECIAL"):
-            if n > 350 and _CENGINE_OK and not os.environ.get("OGC_NO_CENGINE"):
-                special = "cengine"  # ★대형(train≤300 너머): C scan 엔진이 Python scan을 19× 빠르게
+        specials = {}
+        if nw >= 2 and not os.environ.get("OGC_NO_SPECIAL"):
+            if n > 350 and tl >= 30.0 and _CENGINE_OK and not os.environ.get("OGC_NO_CENGINE"):
+                specials[0] = "cengine"  # ★대형(train≤300 너머): C scan 엔진이 Python scan을 19× 빠르게
                 #   완주해 60초 안에 339M nesting 품질을 낸다(features/18). Python scan이 못 끝내
                 #   BLF base(655M)에 묶이던 단축-tl 대형-혼잡을 −48% 깬다. C=Python scan byte-identical
                 #   복제라 무회귀, 실패 시 표준/floor 폴백. n>350 게이트로 train(≤300)은 무영향.
-            elif _RELAX_OK and util >= 0.45 and not os.environ.get("OGC_NO_RELAX"):
-                special = "relax"   # obj1(지각) 전역 스케줄 레버(CP 코어 → nesting repair)
-            elif _OBJ3_OK and util < 0.25 and os.environ.get("OGC_USE_OBJ3"):
-                special = "obj3"    # ★기본 OFF 유지(v1.3.0 순위시뮬 재기각). 게이트는 0.45→0.25로
-                #   좁혀 뒀으나(향후 참조), tl=60 best-of-4서 obj3 ON vs OFF 순위 76:75(노이즈,
-                #   회귀는 obj3-OFF util>0.25 인스턴스=무관). 진짜효과 prob_10/15 −5%뿐·노이즈바닥.
-                #   원인: tl≥30(발화조건)이면 표준 pref_polish가 이미 obj3 수렴 → obj3-assign 이점
-                #   증발. de-risk(tl=15 단일시드)가 v1을 과소평가한 아티팩트. opt-in으로만 둔다.
+                #   대형 경로는 검증된 cengine 단독을 유지한다(포트폴리오는 순서당 construct가 비싸 약함).
+            else:
+                # ★소형~중형(n≤250): 순서 포트폴리오. C가 수천 개 구성 순서를 배치로 돌려 best를 골라
+                #   그 위에 ALNS -- 구성 순서가 obj를 지배하는데 EDD+ALNS는 그 공간을 안 봐 헤드룸을
+                #   흘렸다(측정 n=100 +76%, n=150 +3.4%, n=250 +1.9%; features/19). best-of라 순수 추가.
+                #   n≤250 게이트: 채점 tl(60초)에 C가 충분한 순서를 도는 상한이 ~250이고, n=300은
+                #   순서가 적게 들어 포트폴리오가 자식 슬롯만 차지해 표준 시드를 잃었다(1개씩 측정
+                #   prob_19 n=300 −4.9%, n=250까진 승/tie). 기전 게이트라 과적합 아님(블록수로 계산).
+                if n <= 250 and _CENGINE_OK and tl >= 10.0 and not os.environ.get("OGC_NO_PORTFOLIO"):
+                    specials[0] = "portfolio"
+                # 혼잡(obj1-지배)이면 relax도 *별도 자식*에 -- 포트폴리오가 약한 n≈200 혼잡서 무회귀
+                # 안전망(포트폴리오 −15%여도 relax가 거둔다). tl≥30(CP가 시간 필요), util≥0.45 게이트.
+                if tl >= 30.0:
+                    nxt = 1 if 0 in specials else 0
+                    if _RELAX_OK and util >= 0.45 and not os.environ.get("OGC_NO_RELAX"):
+                        specials[nxt] = "relax"   # obj1(지각) 전역 스케줄 레버(CP 코어 → nesting repair)
+                    elif _OBJ3_OK and util < 0.25 and os.environ.get("OGC_USE_OBJ3"):
+                        specials[nxt] = "obj3"    # ★기본 OFF(v1.3.0 순위시뮬 재기각, opt-in만)
         cp_cap = min(tl * 0.15, 20.0)                       # 인스턴스 무관 비율 게이트(과적합 금지)
         try:
             results = _run_forked(ir, prob_info, t0, tl, base, nw,
-                                  special, cp_cap, return_cap)
+                                  specials, cp_cap, return_cap)
         except OSError as e:
             # os.fork 자체가 불가(seccomp 등 극단 환경)에서만. 메인에서 SIGALRM-bounded 단일
             # 구성+개선 best-effort -- 알람이 return_cap에 overrun을 거두고, 실패하면 floor.

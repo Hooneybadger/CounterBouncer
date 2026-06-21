@@ -36,3 +36,5 @@
 | [15](./15-floor-ref-anchor.md) | floor reference-point 경계 정합(ref≠(0,0) −1 제거·검증기 Block 직접 호출) | 측정완료 | B1·P1 | LEARNING_GUIDE F2 |
 | [16](./16-floor-fp-soundness.md) | floor fit 판정 부동소수 정합(검증기 contains_block 직접 사용·QA red-team 발견) | 측정완료 | B1·P1 | LEARNING_GUIDE F2 |
 | [17](./17-floor-fractional-timing.md) | floor 분수 timing 올림(ceil release/proc·red-team round2 방어강건화) | 측정완료 | B1·P1 | LEARNING_GUIDE F2 |
+| [18](./18-c-scan-engine.md) | C scan 엔진(native 비트마스크·단축-tl 대형-혼잡 −48%) | 측정완료 | B3·P3 | LEARNING_GUIDE C2·D3 |
+| [19](./19-order-portfolio.md) | 순서 포트폴리오(C 배치 수천 순서+ALNS·소형 +76%) | 측정완료 | B3·P3·P4 | LEARNING_GUIDE B3·E2 |

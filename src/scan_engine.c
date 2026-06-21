@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #define MAGIC 0x5343414E
 
@@ -24,6 +25,8 @@ typedef struct { int W, H; } Bay;
 
 static Bay *bays;
 static Block *blocks;
+static int *ORDERS;  /* M개 구성 순서(평탄, M*N_BLOCKS) -- 배치 순서 포트폴리오 */
+static int N_ORD;    /* 순서 개수 M */
 
 /* committed 레코드 */
 typedef struct { int bid, orient, px, py, entry, exit; } Rec;
@@ -89,6 +92,10 @@ static void load(const char *path){
             if(O->max_cx<O->min_cx){O->min_cx=O->min_cy=0;O->max_cx=O->max_cy=0;}
         }
     }
+    /* 배치 순서: M개(각 N_BLOCKS) */
+    N_ORD=ri32();
+    ORDERS=malloc((size_t)N_ORD*N_BLOCKS*sizeof(int));
+    for(size_t i=0;i<(size_t)N_ORD*N_BLOCKS;i++) ORDERS[i]=ri32();
 }
 
 /* ---- 멀티워드 비트연산 ---- */
@@ -285,10 +292,25 @@ static void place_block(int bid){
     o[0]=bid;o[1]=cbay;o[2]=cpx;o[3]=cpy;o[4]=cor;o[5]=centry;o[6]=centry+proc;
 }
 
-static int cmp_edd(const void *a,const void *b){
-    int i=*(const int*)a, j=*(const int*)b;
-    if(blocks[i].due!=blocks[j].due) return blocks[i].due-blocks[j].due;
-    return blocks[i].proc-blocks[j].proc;
+/* 현 committed 상태에서 총 obj(검증기 objective 공식과 동일) -- 배치 내 랭킹용 */
+static double compute_obj(void){
+    double obj1=0;
+    for(int b=0;b<N_BAYS;b++) for(int k=0;k<comm_n[b];k++){
+        Rec *r=&comm[b][k]; int due=blocks[r->bid].due;
+        if(r->exit>due) obj1 += (double)(r->exit-due);
+    }
+    double obj2=0;
+    if(N_BAYS>=2) for(int i=0;i<N_BAYS;i++) for(int j=0;j<N_BAYS;j++) if(i!=j){
+        double dd=bay_weights[i]*bay_loads[i]-bay_weights[j]*bay_loads[j]; if(dd<0)dd=-dd;
+        if(dd>obj2)obj2=dd; }
+    obj2=floor(obj2);
+    double obj3=0;
+    for(int b=0;b<N_BAYS;b++) for(int k=0;k<comm_n[b];k++){
+        Rec *r=&comm[b][k]; double *p=blocks[r->bid].prefs, mx=0;
+        for(int j=0;j<N_BAYS;j++) if(p[j]>mx)mx=p[j];
+        obj3 += mx - p[b];   /* 배정 베이 = b */
+    }
+    return W1*obj1 + W2*obj2 + W3*obj3;
 }
 
 int main(int argc,char**argv){
@@ -301,11 +323,28 @@ int main(int argc,char**argv){
     double avg=tot/N_BAYS;
     for(int j=0;j<N_BAYS;j++) bay_weights[j]=avg/((double)bays[j].W*bays[j].H);
     alloc_occ();
-    out_buf=malloc(sizeof(int)*7*N_BLOCKS); out_n=0;
-    int *seq=malloc(sizeof(int)*N_BLOCKS); for(int i=0;i<N_BLOCKS;i++)seq[i]=i;
-    qsort(seq,N_BLOCKS,sizeof(int),cmp_edd);
-    for(int s=0;s<N_BLOCKS;s++) place_block(seq[s]);
+    out_buf=malloc(sizeof(int)*7*N_BLOCKS);
+    int *best_buf=malloc(sizeof(int)*7*N_BLOCKS); int best_n=0; double best_obj=-1;
+    double max_s = (argc>3) ? atof(argv[3]) : 0.0;   /* 0=무제한, >0=벽시계 상한(초) */
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC,&t0);
+    /* 배치: M개 순서를 각각 construct, 내부 obj로 best 선택. 시간 가드로 든 만큼만. */
+    for(int m=0;m<N_ORD;m++){
+        if(max_s>0 && (m&7)==0){
+            struct timespec tn; clock_gettime(CLOCK_MONOTONIC,&tn);
+            if((tn.tv_sec-t0.tv_sec)+(tn.tv_nsec-t0.tv_nsec)/1e9 > max_s) break;
+        }
+        for(int b=0;b<N_BAYS;b++){ comm_n[b]=0; bay_loads[b]=0; }
+        out_n=0;
+        int *ord=&ORDERS[(size_t)m*N_BLOCKS];
+        for(int s=0;s<N_BLOCKS;s++) place_block(ord[s]);
+        double obj=compute_obj();
+        if(best_obj<0 || obj<best_obj){
+            best_obj=obj; best_n=out_n;
+            memcpy(best_buf,out_buf,sizeof(int)*7*(size_t)out_n);
+        }
+    }
     FILE *f=fopen(argv[2],"wb"); if(!f){perror("out");return 2;}
-    fwrite(&out_n,4,1,f); fwrite(out_buf,4,7*out_n,f); fclose(f);
+    fwrite(&best_obj,8,1,f); fwrite(&best_n,4,1,f); fwrite(best_buf,4,7*best_n,f);
+    fclose(f);
     return 0;
 }
