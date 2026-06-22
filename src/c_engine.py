@@ -37,25 +37,75 @@ except ImportError:  # IDE package layout
     from ogc2026.src.constructor import _rel_bbox, loads_from_committed
 
 _MAGIC = 0x5343414E
-_BINARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_engine")
+_BINARY_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_engine")
+_BINARY_CACHE = None   # 실제로 execve 되는 바이너리 경로(필요시 쓰기+exec 위치로 복사). _resolve_binary가 캐시.
+
+
+def _can_exec(path: str) -> bool:
+    """path의 바이너리를 인자 없이 한 번 실제로 execve 해 실행 가능 여부를 본다. 인자 없으면 usage를
+    출력하고 종료(returncode 0)하므로 정상종료/usage = '이 호스트서 execve 가능'이다. +x 비트
+    (os.access)만으론 noexec 마운트를 못 거르므로 *실제 실행*으로 판정한다. OSError(ENOEXEC·권한·
+    seccomp)·timeout이면 False."""
+    try:
+        r = subprocess.run([path], capture_output=True, timeout=10)
+        return r.returncode == 0 or b"usage" in (r.stdout + r.stderr)
+    except Exception:
+        return False
+
+
+def _resolve_binary():
+    """*실제로 execve 되는* scan_engine 경로를 반환한다(없으면 None, 캐시).
+
+    ★왜 단순 chmod로 부족한가(서버서 C가 통째 무력화된 진짜 원인 후보). 평가 서버는 firejail로 파일
+    시스템을 실행 폴더에 가두고("상위 디렉터리 접근 불가", 명세 §3.2) zip을 풀 때 +x를 벗긴다(0o644).
+    실행 폴더가 *읽기전용*이면 제자리 `os.chmod`가 except로 조용히 실패→바이너리 0o644 그대로→실행
+    불가→`_CENGINE_OK=False`→cengine·portfolio가 라우팅조차 안 돼 폴백(P3=736M 무변). v1.3.1의 제자리
+    chmod가 이 경우 무력했다. 그런데 supervisor가 `/tmp`에 pickle로 자식 IPC를 하고 서버서 동작하므로
+    (P1~P6 정상값) **`/tmp`는 쓰기가능**임이 확인된다. 그래서 제자리가 안 되면 바이너리를 쓰기가능
+    위치로 *복사*해 거기서 +x를 주고 실행한다 -- 읽기전용 실행 폴더를 우회한다.
+
+    순서: (1) 제자리 chmod 후 실제 실행 시험, (2) 실패 시 임시디렉터리/cwd/홈으로 복사+chmod 후 실행
+    시험. 각 후보를 *실제 execve*로 판정(noexec 마운트까지 거른다). 전부 실패면 None→폴백(−1 불가).
+    execve 자체가 seccomp로 막힌 환경이면 모든 후보가 실패→None→안전 폴백."""
+    global _BINARY_CACHE
+    if _BINARY_CACHE and _can_exec(_BINARY_CACHE):
+        return _BINARY_CACHE
+    if not os.path.isfile(_BINARY_SRC):
+        return None
+    # (1) 제자리: 폴더가 쓰기가능하면 chmod 성공 → 복사 비용 0
+    try:
+        os.chmod(_BINARY_SRC, 0o755)
+    except Exception:
+        pass
+    if _can_exec(_BINARY_SRC):
+        _BINARY_CACHE = _BINARY_SRC
+        return _BINARY_CACHE
+    # (2) 제자리 실패(비소유 EPERM·ro-mount EROFS) → 쓰기+exec 후보로 복사 후 실행. 후보 순서:
+    #   실행폴더(바이너리가 거기서 도니 *exec 보장* — 비소유여도 폴더가 쓰기가능하면 소유 복사본 생성)
+    #   → /tmp(supervisor가 쓰기 입증, 단 noexec 마운트 가능) → cwd → 홈. noexec/읽기전용이면 다음 후보로.
+    import shutil
+    seen = set()
+    exec_dir = os.path.dirname(_BINARY_SRC)
+    for base in (exec_dir, tempfile.gettempdir(), os.getcwd(), os.path.expanduser("~")):
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        try:
+            d = tempfile.mkdtemp(prefix="ceng_bin_", dir=base)
+            dst = os.path.join(d, "scan_engine")
+            shutil.copy2(_BINARY_SRC, dst)
+            os.chmod(dst, 0o755)
+        except Exception:
+            continue
+        if _can_exec(dst):
+            _BINARY_CACHE = dst
+            return _BINARY_CACHE
+    return None
 
 
 def c_engine_available() -> bool:
-    """바이너리가 존재하고 실행 가능한가.
-
-    ★평가 서버가 제출 zip을 Python `zipfile.extractall`로 풀면 실행권한(+x)이 *벗겨진다*
-    (0o644로 추출 -- zipfile의 알려진 동작). 그러면 `os.access(X_OK)`가 False라 C 엔진이
-    통째로 비활성→standard 폴백되고(제출 v1.3.0이 직전과 obj 동일했던 근본 원인), cengine·
-    portfolio 이득이 서버서 0이 된다. 그래서 *런타임에 chmod로 +x를 복원*한다 -- 추출 방식과
-    무관하게 바이너리를 실행 가능으로 만든다(파일 소유자라 chmod 허용). 로컬(src 직접, 이미 +x)
-    엔 무영향. chmod가 막혀도(읽기전용 등) except로 흡수하고 X_OK 검사로 최종 판정→실패 시
-    폴백이라 −1 불가."""
-    if os.path.isfile(_BINARY):
-        try:
-            os.chmod(_BINARY, 0o755)
-        except Exception:
-            pass
-    return os.path.isfile(_BINARY) and os.access(_BINARY, os.X_OK)
+    """C 엔진 바이너리가 이 호스트에서 *실제로 실행되는가*(_resolve_binary 참조). 실패 시 False→폴백."""
+    return _resolve_binary() is not None
 
 
 def _edd_order(blocks):
@@ -158,7 +208,8 @@ def _run_binary(prob_info, ir, orders, max_s, timeout, deadline=None):
     deadline(벽시계 절대시각)을 주면 *마샬 직후* 남은 시간으로 max_s를 정한다 -- 마샬(대형 Shapely
     래스터화)이 가변이라, 여러 순서를 시도할 때 마샬+배치가 deadline을 넘지 않게 한다. C는 정밀
     시간가드(순서마다 체크+다음순서 예측)로 max_s를 지키고, EDD가 첫 순서라 1개만 들어도 안전."""
-    if not c_engine_available():
+    binary = _resolve_binary()
+    if binary is None:
         return None
     tmpdir = None
     try:
@@ -168,7 +219,7 @@ def _run_binary(prob_info, ir, orders, max_s, timeout, deadline=None):
         _marshal(prob_info, ir, inp, orders)
         if max_s is None and deadline is not None:
             max_s = max(1.0, deadline - time.time() - 1.5)   # 마샬 후 남은 배치 예산
-        cmd = [_BINARY, inp, outp]
+        cmd = [binary, inp, outp]
         if max_s is not None:
             cmd.append(str(max_s))
         r = subprocess.run(cmd, capture_output=True, timeout=timeout)
