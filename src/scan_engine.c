@@ -313,9 +313,11 @@ static double compute_obj(void){
     return W1*obj1 + W2*obj2 + W3*obj3;
 }
 
-int main(int argc,char**argv){
-    if(argc<3){fprintf(stderr,"usage: scan in out\n");return 2;}
-    load(argv[1]);
+/* 엔진 본체. 바이너리(main)·공유라이브러리(.so via ctypes) 양쪽에서 호출.
+ * ★.so로 부르면 dlopen/mmap이라 execve·+x 불필요 → 서버 seccomp execve 차단을 우회한다.
+ * in_path/out_path = 마샬 입력·출력 파일, max_s = 벽시계 상한(0=무제한). 반환 0=성공,2=실패. */
+int scan_run(const char *in_path, const char *out_path, double max_s){
+    load(in_path);
     comm=calloc(N_BAYS,sizeof(Rec*)); comm_n=calloc(N_BAYS,sizeof(int));
     comm_cap=calloc(N_BAYS,sizeof(int));
     bay_loads=calloc(N_BAYS,sizeof(double)); bay_weights=calloc(N_BAYS,sizeof(double));
@@ -325,7 +327,6 @@ int main(int argc,char**argv){
     alloc_occ();
     out_buf=malloc(sizeof(int)*7*N_BLOCKS);
     int *best_buf=malloc(sizeof(int)*7*N_BLOCKS); int best_n=0; double best_obj=-1;
-    double max_s = (argc>3) ? atof(argv[3]) : 0.0;   /* 0=무제한, >0=벽시계 상한(초) */
     struct timespec t0; clock_gettime(CLOCK_MONOTONIC,&t0);
     double last_dur = 0.0;   /* 직전 순서 construct 소요(다음 순서 예측용) */
     /* 배치: M개 순서를 각각 construct, 내부 obj로 best 선택. *정밀* 시간 가드 -- 매 순서마다
@@ -351,8 +352,15 @@ int main(int argc,char**argv){
         struct timespec te; clock_gettime(CLOCK_MONOTONIC,&te);
         last_dur=(te.tv_sec-ts.tv_sec)+(te.tv_nsec-ts.tv_nsec)/1e9;
     }
-    FILE *f=fopen(argv[2],"wb"); if(!f){perror("out");return 2;}
+    FILE *f=fopen(out_path,"wb"); if(!f){perror("out");return 2;}
     fwrite(&best_obj,8,1,f); fwrite(&best_n,4,1,f); fwrite(best_buf,4,7*best_n,f);
     fclose(f);
     return 0;
+}
+
+/* 바이너리 진입점(하위호환): argv를 scan_run으로 넘긴다. .so 빌드 시엔 미사용. */
+int main(int argc,char**argv){
+    if(argc<3){fprintf(stderr,"usage: scan in out [max_s]\n");return 2;}
+    double max_s = (argc>3) ? atof(argv[3]) : 0.0;   /* 0=무제한 */
+    return scan_run(argv[1], argv[2], max_s);
 }

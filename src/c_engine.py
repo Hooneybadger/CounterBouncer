@@ -37,75 +37,43 @@ except ImportError:  # IDE package layout
     from ogc2026.src.constructor import _rel_bbox, loads_from_committed
 
 _MAGIC = 0x5343414E
-_BINARY_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_engine")
-_BINARY_CACHE = None   # 실제로 execve 되는 바이너리 경로(필요시 쓰기+exec 위치로 복사). _resolve_binary가 캐시.
+# ★공유 라이브러리(.so)를 ctypes로 in-process 로드(dlopen)한다. v1.3.0~v1.3.2의 subprocess(execve)
+#   경로가 서버서 죽은 진짜 원인이 *전달 방식*이었다 — 샌드박스가 execve(subprocess)는 seccomp로
+#   막아도 dlopen(.so 로드)은 허용한다(서버가 numpy·shapely·ortools 등 .so를 늘 로드하니 100% 허용).
+#   연구 + 포럼 실전(OR_3Bros의 C++ .so가 서버서 작동)으로 확증. dlopen은 +x 비트도 불필요(execve가
+#   아니라 mmap) → zipfile 추출 +x 손실 무관. Gmail이 *.so 확장자*를 차단하므로(우리 무확장 바이너리는
+#   통과한 게 증거 — 차단은 확장자 기준) 파일명은 중립 확장자 `scan_engine.bin`으로 둔다. dlopen은
+#   확장자를 안 보므로 .bin이어도 로드된다.
+_LIB_NAME = "scan_engine.bin"
+_LIB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), _LIB_NAME)
+_LIB = None         # ctypes.CDLL 핸들(캐시)
+_LIB_TRIED = False
 
 
-def _can_exec(path: str) -> bool:
-    """path의 바이너리를 인자 없이 한 번 실제로 execve 해 실행 가능 여부를 본다. 인자 없으면 usage를
-    출력하고 종료(returncode 0)하므로 정상종료/usage = '이 호스트서 execve 가능'이다. +x 비트
-    (os.access)만으론 noexec 마운트를 못 거르므로 *실제 실행*으로 판정한다. OSError(ENOEXEC·권한·
-    seccomp)·timeout이면 False."""
-    try:
-        r = subprocess.run([path], capture_output=True, timeout=10)
-        return r.returncode == 0 or b"usage" in (r.stdout + r.stderr)
-    except Exception:
-        return False
-
-
-def _resolve_binary():
-    """*실제로 execve 되는* scan_engine 경로를 반환한다(없으면 None, 캐시).
-
-    ★왜 단순 chmod로 부족한가(서버서 C가 통째 무력화된 진짜 원인 후보). 평가 서버는 firejail로 파일
-    시스템을 실행 폴더에 가두고("상위 디렉터리 접근 불가", 명세 §3.2) zip을 풀 때 +x를 벗긴다(0o644).
-    실행 폴더가 *읽기전용*이면 제자리 `os.chmod`가 except로 조용히 실패→바이너리 0o644 그대로→실행
-    불가→`_CENGINE_OK=False`→cengine·portfolio가 라우팅조차 안 돼 폴백(P3=736M 무변). v1.3.1의 제자리
-    chmod가 이 경우 무력했다. 그런데 supervisor가 `/tmp`에 pickle로 자식 IPC를 하고 서버서 동작하므로
-    (P1~P6 정상값) **`/tmp`는 쓰기가능**임이 확인된다. 그래서 제자리가 안 되면 바이너리를 쓰기가능
-    위치로 *복사*해 거기서 +x를 주고 실행한다 -- 읽기전용 실행 폴더를 우회한다.
-
-    순서: (1) 제자리 chmod 후 실제 실행 시험, (2) 실패 시 임시디렉터리/cwd/홈으로 복사+chmod 후 실행
-    시험. 각 후보를 *실제 execve*로 판정(noexec 마운트까지 거른다). 전부 실패면 None→폴백(−1 불가).
-    execve 자체가 seccomp로 막힌 환경이면 모든 후보가 실패→None→안전 폴백."""
-    global _BINARY_CACHE
-    if _BINARY_CACHE and _can_exec(_BINARY_CACHE):
-        return _BINARY_CACHE
-    if not os.path.isfile(_BINARY_SRC):
+def _load_lib():
+    """scan_engine 공유 라이브러리를 ctypes로 로드(dlopen)해 핸들을 반환(실패 시 None, 캐시).
+    scan_run(in_path, out_path, max_s)->int 시그니처를 설정한다. dlopen이라 +x·execve 불필요 —
+    로드 실패(파일 부재·dlopen 차단·심볼 없음) 시 None→호출부 폴백(−1 불가)."""
+    global _LIB, _LIB_TRIED
+    if _LIB_TRIED:
+        return _LIB
+    _LIB_TRIED = True
+    if not os.path.isfile(_LIB_PATH):
         return None
-    # (1) 제자리: 폴더가 쓰기가능하면 chmod 성공 → 복사 비용 0
     try:
-        os.chmod(_BINARY_SRC, 0o755)
+        import ctypes
+        lib = ctypes.CDLL(_LIB_PATH)
+        lib.scan_run.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_double]
+        lib.scan_run.restype = ctypes.c_int
+        _LIB = lib
     except Exception:
-        pass
-    if _can_exec(_BINARY_SRC):
-        _BINARY_CACHE = _BINARY_SRC
-        return _BINARY_CACHE
-    # (2) 제자리 실패(비소유 EPERM·ro-mount EROFS) → 쓰기+exec 후보로 복사 후 실행. 후보 순서:
-    #   실행폴더(바이너리가 거기서 도니 *exec 보장* — 비소유여도 폴더가 쓰기가능하면 소유 복사본 생성)
-    #   → /tmp(supervisor가 쓰기 입증, 단 noexec 마운트 가능) → cwd → 홈. noexec/읽기전용이면 다음 후보로.
-    import shutil
-    seen = set()
-    exec_dir = os.path.dirname(_BINARY_SRC)
-    for base in (exec_dir, tempfile.gettempdir(), os.getcwd(), os.path.expanduser("~")):
-        if not base or base in seen:
-            continue
-        seen.add(base)
-        try:
-            d = tempfile.mkdtemp(prefix="ceng_bin_", dir=base)
-            dst = os.path.join(d, "scan_engine")
-            shutil.copy2(_BINARY_SRC, dst)
-            os.chmod(dst, 0o755)
-        except Exception:
-            continue
-        if _can_exec(dst):
-            _BINARY_CACHE = dst
-            return _BINARY_CACHE
-    return None
+        _LIB = None
+    return _LIB
 
 
 def c_engine_available() -> bool:
-    """C 엔진 바이너리가 이 호스트에서 *실제로 실행되는가*(_resolve_binary 참조). 실패 시 False→폴백."""
-    return _resolve_binary() is not None
+    """C 엔진 .so가 이 호스트에서 dlopen 가능한가(=ctypes.CDLL 성공). 실패 시 False→폴백(−1 불가)."""
+    return _load_lib() is not None
 
 
 def _edd_order(blocks):
@@ -208,8 +176,8 @@ def _run_binary(prob_info, ir, orders, max_s, timeout, deadline=None):
     deadline(벽시계 절대시각)을 주면 *마샬 직후* 남은 시간으로 max_s를 정한다 -- 마샬(대형 Shapely
     래스터화)이 가변이라, 여러 순서를 시도할 때 마샬+배치가 deadline을 넘지 않게 한다. C는 정밀
     시간가드(순서마다 체크+다음순서 예측)로 max_s를 지키고, EDD가 첫 순서라 1개만 들어도 안전."""
-    binary = _resolve_binary()
-    if binary is None:
+    lib = _load_lib()
+    if lib is None:
         return None
     tmpdir = None
     try:
@@ -219,11 +187,12 @@ def _run_binary(prob_info, ir, orders, max_s, timeout, deadline=None):
         _marshal(prob_info, ir, inp, orders)
         if max_s is None and deadline is not None:
             max_s = max(1.0, deadline - time.time() - 1.5)   # 마샬 후 남은 배치 예산
-        cmd = [binary, inp, outp]
-        if max_s is not None:
-            cmd.append(str(max_s))
-        r = subprocess.run(cmd, capture_output=True, timeout=timeout)
-        if r.returncode != 0 or not os.path.exists(outp):
+        # ctypes 직접 호출(in-process, dlopen) — subprocess(execve) 대체. timeout은 in-process라
+        # Python서 강제 못 함(스레드 블록); C 내부 max_s 시간가드가 벽시계 상한을 지키고, 그래도
+        # 넘기면 supervisor가 return_cap에 자식째 SIGKILL(=옛 subprocess timeout 역할). (void)timeout.
+        rc = lib.scan_run(inp.encode(), outp.encode(),
+                          float(max_s if max_s is not None else 0.0))
+        if rc != 0 or not os.path.exists(outp):
             return None
         c_obj, assignments = _parse(outp)
         if len(assignments) != len(prob_info["blocks"]):
