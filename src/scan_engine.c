@@ -214,7 +214,12 @@ static int best_in_bay(int bay,int bid,int r_time,int proc,
                     if(has_rev){
                         clear_occ(occNew,H); stamp(occNew,bid,o,px,py,H);
                         /* reverse: 각 rev 블록 c 가 새블록 crane(occNew의 upper)와 충돌? */
-                        static uint64_t *upN=NULL; if(!upN) upN=calloc((size_t)MAX_LAY*MAXH*WORDS,sizeof(uint64_t));
+                        /* upN: 멀티콜 재진입 안전 -- 첫 콜 크기에 고정 않고 현 need가 더 크면 재할당
+                         * (rev와 동일 self-resize). 단일콜(서버 프로덕션)은 upN_sz=0<need라
+                         * free(NULL)+calloc == 옛 if(!upN) 와 바이트동일 -> 크라운주얼 거동 불변. */
+                        static uint64_t *upN=NULL; static size_t upN_sz=0;
+                        size_t upN_need=(size_t)MAX_LAY*MAXH*WORDS;
+                        if(upN_sz<upN_need){ free(upN); upN=calloc(upN_need,sizeof(uint64_t)); upN_sz=upN_need; }
                         build_upper(upN,occNew,H);
                         int blocked=0;
                         for(int rr=0;rr<nrev;rr++){ Rec *c=&comm[bay][rev[rr]];
