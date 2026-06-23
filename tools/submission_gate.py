@@ -58,15 +58,17 @@ def main():
     mode = os.stat(os.path.join(EXTRACT, LIB_NAME)).st_mode & 0o777
     shutil.copy(os.path.join(ROOT, "src", "utils.py"), os.path.join(EXTRACT, "utils.py"))  # 서버 제공
 
-    # 2) 추출 dir서 import → ctypes.CDLL(dlopen)이 0o644 .bin을 로드하는지(+x 무관) _CENGINE_OK 확인
+    # 2) 추출 dir서 import. ★로드는 import가 아닌 *call 시점*(이전 OGC 우승팀 컨벤션 — algorithm()
+    #    안에서 ctypes.CDLL). 그래서 import 직후 _CENGINE_OK은 None(지연)이 정상이고, algorithm()
+    #    호출 후 True여야 한다. (옛 memfd/noexec 가설 폐기 — 우승팀 자료가 동봉 .so의 ctypes 로드를 증명.)
     sys.path.insert(0, EXTRACT)
     import myalgorithm
     from utils import check_feasibility
-    print(f"zipfile 추출 후 {LIB_NAME}: {oct(mode)} (+x 없음) → ctypes dlopen → _CENGINE_OK={myalgorithm._CENGINE_OK}")
-    if not myalgorithm._CENGINE_OK:
-        print("  ★FAIL: _CENGINE_OK=False — .so dlopen 실패(ctypes.CDLL 불가?)"); ok = False
+    print(f"zipfile 추출 후 {LIB_NAME}: {oct(mode)} → import 직후 _CENGINE_OK={myalgorithm._CENGINE_OK}"
+          f"(None=call-시점 지연 로드, 정상)")
 
-    # 3) 소형 portfolio + 대형 cengine이 *실제로 켜졌는지*(폴백 아닌지) obj로 확인
+    # 3) 소형 portfolio + 대형 cengine이 *실제로 켜졌는지*(폴백 아닌지) obj로 확인. algorithm() 호출이
+    #    call-시점 ctypes 로드를 트리거한다 — obj가 폴백보다 충분히 낮으면 C가 켜진 것.
     p1 = json.load(open(os.path.join(TRAIN, "prob_1.json")))
     p20 = json.load(open(os.path.join(TRAIN, "prob_20.json")))
     big = copy.deepcopy(p20); big["blocks"] = [copy.deepcopy(b) for _ in range(3) for b in p20["blocks"]]
@@ -87,8 +89,12 @@ def main():
         print(f"  {name:8} tl={tl:.0f} {lbl}: feasible={feas} obj={obj:,.0f} (폴백={fb:,}) "
               f"C발화={fired} -> {tag}")
 
-    print("PASS — zipfile 추출(0o644)에도 ctypes dlopen으로 .so 로드+C 발화(execve/+x 우회)" if ok
-          else "FAIL — 서버 조건서 C 안 켜짐")
+    # call 후 _CENGINE_OK=True(call-시점 ctypes 로드 성공) 확인
+    if not myalgorithm._CENGINE_OK:
+        print("  ★FAIL: algorithm() 호출 후에도 _CENGINE_OK=False — ctypes.CDLL 로드 실패"); ok = False
+
+    print("PASS — zipfile 추출(0o644)서 scan_engine.bin을 plain ctypes로 call-시점 로드+C 발화" if ok
+          else "FAIL — 추출 조건서 C 안 켜짐")
     return 0 if ok else 1
 
 

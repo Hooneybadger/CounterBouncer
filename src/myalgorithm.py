@@ -82,13 +82,17 @@ try:
         from c_engine import run_c_engine, run_portfolio, c_engine_available
     except ImportError:
         from ogc2026.src.c_engine import run_c_engine, run_portfolio, c_engine_available
-    _CENGINE_OK = c_engine_available()
 except Exception:
-    _CENGINE_OK = False
     def run_c_engine(*a, **k):  # 폴백 스텁
         return None
     def run_portfolio(*a, **k):  # 폴백 스텁
         return None
+    def c_engine_available():   # 폴백 스텁
+        return False
+# ★C 엔진 .so 로드 시점 = import 아닌 *call 시점*(이전 OGC 우승팀 컨벤션 — algorithm() 안에서
+#   ctypes.CDLL). import-시점 로드는 서버 검증/실행 컨텍스트가 다를 때 실패→영구 캐시될 위험이 있어
+#   algorithm() 첫 호출 때(실행 컨텍스트 확정 후) 한 번 설정한다.
+_CENGINE_OK = None
 
 
 # -----------------------------------------------------------------------------
@@ -723,6 +727,13 @@ def algorithm(prob_info, timelimit=60):
     name = prob_info.get("name", "?")
     n = len(prob_info.get("blocks", []))
     tl = float(timelimit)
+    # ★C 엔진 .so를 *호출 시점*에 lazy 로드(import 아님 — 우승팀 컨벤션, 서버 실행 컨텍스트 확정 후).
+    global _CENGINE_OK
+    if _CENGINE_OK is None:
+        try:
+            _CENGINE_OK = c_engine_available()
+        except Exception:
+            _CENGINE_OK = False
     # 메인은 무슨 일이 있어도 이 시각까지 반환한다(CLAUDE.md 절대 규칙 0.93*tl). 메인은
     # 여기 이후 무거운 일을 안 하므로(수집·종료·min·반환만, ~ms) 7% 여유가 느린 서버의
     # 직렬화·IPC tail까지 덮는다. 자식 _improve는 polish 0.88 + 최종 check로 ~0.90에 끝나
