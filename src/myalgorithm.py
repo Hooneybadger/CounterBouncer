@@ -734,6 +734,15 @@ def algorithm(prob_info, timelimit=60):
             _CENGINE_OK = c_engine_available()
         except Exception:
             _CENGINE_OK = False
+    # ★★★ 진단(임시·발사 후 *반드시* 제거): _CENGINE_OK True(= 서버서 .so가 ctypes로 *로드됨*) +
+    #   대형(n>250)이면 일부러 예외를 던져 서버 피드백에 alg_error를 만든다. 목적 = "서버서 .so가
+    #   *로드*되는데 *실행/cengine*이 실패하는가, 아니면 *로드 자체*가 실패하는가"를 1쿨다운에 확정:
+    #     · P3가 alg_error  → .so 로드됨 → 문제는 *실행*(fork/file 등) → B' 타깃 재작성이 옳다.
+    #     · P3가 736M 그대로 → .so 미로드 → 문제는 *로딩* → 로딩을 파야(B' 헛수고).
+    #   소형·중형(n≤250)은 발화 안 해 점수 정상. .so 미로드(현 서버 상태)면 조건 거짓이라 발화 안 함
+    #   = feasibility-safe(−1 *추가* 없음, 희생은 이미 736M인 대형뿐). env로 로컬 OFF 가능(서버는 기본 ON).
+    if _CENGINE_OK and n > 250 and os.environ.get("OGC_DIAG_CENGINE", "1") == "1":
+        raise RuntimeError("DIAG_CENGINE_LOADED n=%d" % n)
     # 메인은 무슨 일이 있어도 이 시각까지 반환한다(CLAUDE.md 절대 규칙 0.93*tl). 메인은
     # 여기 이후 무거운 일을 안 하므로(수집·종료·min·반환만, ~ms) 7% 여유가 느린 서버의
     # 직렬화·IPC tail까지 덮는다. 자식 _improve는 polish 0.88 + 최종 check로 ~0.90에 끝나
