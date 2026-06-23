@@ -723,6 +723,13 @@ def algorithm(prob_info, timelimit=60):
     name = prob_info.get("name", "?")
     n = len(prob_info.get("blocks", []))
     tl = float(timelimit)
+    # ★폴백 제거(진단, v1.3.3). cengine 경로로 가는 대형(n>350·tl≥30)인데 resolver가 바이너리를
+    #   *어느 위치서도* 못 살리면(_CENGINE_OK=False) 표준경로로 폴백하지 *않고* raise → 서버 −1.
+    #   v1.3.2까지 이 자리서 조용히 표준 폴백(P3=736M·무에러)이라 "바이너리死"와 "P3가 C경로 밖
+    #   (다른 분류)"을 못 갈랐다. 이제 피드백이 3분기로 확정된다: P3 −1=대형+바이너리死 / P3 332M=
+    #   바이너리 작동 / P3 736M·무에러=P3가 대형 아님(다른 분류). OGC_NO_CENGINE이면 미발동(테스트).
+    if n > 350 and tl >= 30.0 and not _CENGINE_OK and not os.environ.get("OGC_NO_CENGINE"):
+        raise RuntimeError(f"cengine n={n}: binary unrunnable on this host (폴백 제거 → −1 신호)")
     # 메인은 무슨 일이 있어도 이 시각까지 반환한다(CLAUDE.md 절대 규칙 0.93*tl). 메인은
     # 여기 이후 무거운 일을 안 하므로(수집·종료·min·반환만, ~ms) 7% 여유가 느린 서버의
     # 직렬화·IPC tail까지 덮는다. 자식 _improve는 polish 0.88 + 최종 check로 ~0.90에 끝나
