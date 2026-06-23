@@ -771,12 +771,14 @@ def algorithm(prob_info, timelimit=60):
         util = _utilization(prob_info)
         specials = {}
         if nw >= 2 and not os.environ.get("OGC_NO_SPECIAL"):
-            if n > 350 and tl >= 30.0 and _CENGINE_OK and not os.environ.get("OGC_NO_CENGINE"):
-                specials[0] = "cengine"  # ★대형(train≤300 너머): C scan 엔진이 Python scan을 19× 빠르게
-                #   완주해 60초 안에 339M nesting 품질을 낸다(features/18). Python scan이 못 끝내
-                #   BLF base(655M)에 묶이던 단축-tl 대형-혼잡을 −48% 깬다. C=Python scan byte-identical
-                #   복제라 무회귀, 실패 시 표준/floor 폴백. n>350 게이트로 train(≤300)은 무영향.
-                #   대형 경로는 검증된 cengine 단독을 유지한다(포트폴리오는 순서당 construct가 비싸 약함).
+            if n > 250 and tl >= 30.0 and _CENGINE_OK and not os.environ.get("OGC_NO_CENGINE"):
+                specials[0] = "cengine"  # ★대형(>350) + GAP(251~350, v1.4.1): C scan이 Python scan을 19×
+                #   빠르게 *완주*해 nesting 품질을 낸다(features/18). 표준 경로의 best-of-3는 construct
+                #   예산을 3등분해 Python scan을 *굶겨* 미완주(BLF에 묶임)인데, 단일 C scan은 6초에 완주.
+                #   ★측정: GAP prob_20(n=300) 표준 368,593 → cengine 157,781(−57%, tl=60). C=Python scan
+                #   byte-identical 복제라 무회귀, best-of+실패시 표준/floor 폴백. (portfolio는 n=300서
+                #   순서당 construct가 비싸 약했지만 — prob_19 −4.9% — cengine은 *단일 완주*라 그 함정을
+                #   피한다. 그래서 GAP은 portfolio 아닌 cengine으로 확장.)
             else:
                 # ★소형~중형(n≤250): 순서 포트폴리오. C가 수천 개 구성 순서를 배치로 돌려 best를 골라
                 #   그 위에 ALNS -- 구성 순서가 obj를 지배하는데 EDD+ALNS는 그 공간을 안 봐 헤드룸을
