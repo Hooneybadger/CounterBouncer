@@ -57,3 +57,7 @@ gurobi.lic
 lib_scan_engine.so
 *.abi3.so
 scan_engine.so
+
+# macOS zip 잡파일
+__MACOSX/
+.DS_Store
