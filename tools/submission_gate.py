@@ -36,7 +36,7 @@ import submit  # noqa  (build_archive)
 
 TRAIN = os.path.join(ROOT, "train")
 EXTRACT = "/tmp/ogc_submission_gate"
-LIB_NAME = "scan_engine.bin"   # .so를 중립 확장자로 동봉(Gmail이 .so 확장자 차단 → .bin은 통과)
+LIB_NAME = "scan_engine.b64"   # ★.so를 base64로 동봉(Gmail .so-in-zip 차단 통과)→런타임 디코딩(조직위 권고)
 
 # C가 켜지면 이 값보다 훨씬 낮다(폴백이면 폴백값이라 위). 폴백/C 판별 임계.
 SMALL_FALLBACK = 21021      # prob_1 standard(폴백) obj. C portfolio면 ~4k.
@@ -52,10 +52,12 @@ def main():
         z.extractall(EXTRACT)
     ok = True
     if LIB_NAME not in names:
-        print(f"  ★FAIL: {LIB_NAME}(.so)가 zip에 없음"); ok = False
-    if "scan_engine" in names:
-        print("  ★WARN: 옛 standalone 바이너리 scan_engine이 zip에 남아 있음(불필요)")
-    mode = os.stat(os.path.join(EXTRACT, LIB_NAME)).st_mode & 0o777
+        print(f"  ★FAIL: {LIB_NAME}(base64 .so)가 zip에 없음"); ok = False
+    # ★Gmail 안전 + 서버 로드: 직접 .so/.bin은 zip에 *있으면 안 된다*(.so=Gmail 차단, .bin=서버
+    #   미로드 진단확정). base64(.b64)만 동봉 → 런타임 디코딩.
+    bad = [x for x in names if x.endswith(".so") or x in ("scan_engine.bin", "scan_engine")]
+    if bad:
+        print(f"  ★FAIL: 직접 바이너리가 zip에 있음(Gmail 차단/서버 미로드 위험): {bad}"); ok = False
     shutil.copy(os.path.join(ROOT, "src", "utils.py"), os.path.join(EXTRACT, "utils.py"))  # 서버 제공
 
     # 2) 추출 dir서 import. ★로드는 import가 아닌 *call 시점*(이전 OGC 우승팀 컨벤션 — algorithm()
@@ -64,8 +66,8 @@ def main():
     sys.path.insert(0, EXTRACT)
     import myalgorithm
     from utils import check_feasibility
-    print(f"zipfile 추출 후 {LIB_NAME}: {oct(mode)} → import 직후 _CENGINE_OK={myalgorithm._CENGINE_OK}"
-          f"(None=call-시점 지연 로드, 정상)")
+    print(f"zipfile 추출: {LIB_NAME}(base64) → import 직후 _CENGINE_OK={myalgorithm._CENGINE_OK}"
+          f"(None=call-시점 .b64 디코딩→로드 지연, 정상)")
 
     # 3) 소형 portfolio + 대형 cengine이 *실제로 켜졌는지*(폴백 아닌지) obj로 확인. algorithm() 호출이
     #    call-시점 ctypes 로드를 트리거한다 — obj가 폴백보다 충분히 낮으면 C가 켜진 것.

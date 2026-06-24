@@ -53,3 +53,4 @@ results/
 _workspace/
 gurobi.lic
 *.lic
+lib_scan_engine.so

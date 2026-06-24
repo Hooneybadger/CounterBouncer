@@ -22,7 +22,12 @@ EXCLUDED_PARTS = {"__pycache__", ".git", ".pytest_cache", ".mypy_cache"}
 # 평가 서버가 자기 utils.py로 덮어쓰므로 제출 zip에 넣지 않는다(대회 규칙). 우리 src/utils.py
 # 는 대회 원본과 바이트 동일이라 import 대상(Bay·check_feasibility·_poly_from_verts 등)은
 # 서버 utils.py가 그대로 제공한다.
-EXCLUDED_NAMES = {"utils.py"}
+EXCLUDED_NAMES = {"utils.py",
+                  # ★C 엔진은 scan_engine.b64(base64)로만 동봉한다 — 런타임에 lib_scan_engine.so로
+                  #   디코딩해 로드(조직위 권고·서버 .bin 미로드 수정). 직접 .so/.bin은 (a)Gmail이
+                  #   .so-in-zip 차단 (b)서버서 .bin 미로드라 *절대* 제출에 넣지 않는다(런타임 디코딩 산물
+                  #   lib_scan_engine.so가 src에 남아도 zip서 배제).
+                  "lib_scan_engine.so", "scan_engine.bin", "scan_engine"}
 # 제출에 반드시 들어가야 하는 모듈(myalgorithm이 import하는 우리 코드). 검증용.
 REQUIRED_NAMES = {"myalgorithm.py", "constructor.py", "alns.py",
                   "raster_engine.py", "baseline_greedy.py", "relax_repair.py"}

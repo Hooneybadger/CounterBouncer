@@ -46,15 +46,50 @@ _MAGIC = 0x5343414E
 #   (lib접두+SONAME)를 plain ctypes로 절대·cwd상대 다중경로로 로드하고, 로드 시점은 myalgorithm이
 #   call 시점에 lazy 호출한다. 제출 시 Gmail이 .so-in-zip을 막으면 `scan_engine.bin`으로 동봉할 수
 #   있게 두 이름을 다 시도한다(로더는 이름-불문, dlopen은 확장자 무관).
-_LIB_NAMES = ("lib_scan_engine.so", "scan_engine.bin")   # .so 우선(컨벤션) · .bin 폴백(Gmail 차단 대비)
+_B64_NAME = "scan_engine.b64"   # ★.so를 base64로 동봉(이메일 통과)→런타임 디코딩(조직위 권고)
+_LIB_NAMES = ("lib_scan_engine.so", "scan_engine.bin")   # 직접 동봉본 폴백(디코딩본 우선)
 _LIB = None         # ctypes.CDLL 핸들(캐시)
 _LIB_TRIED = False
 
 
+def _decode_so():
+    """★진단 확정(서버서 scan_engine.bin _CENGINE_OK=False=*미로드*) + 조직위 권고의 수정:
+    문제 파일(.so)을 base64로 동봉해 이메일 서비스(Gmail이 .so-in-zip 차단)를 통과시키고, *런타임에
+    원래 .so로 디코딩*해 디스크에 쓴 뒤 로드한다. 서버가 *.so 확장자만 mmap-exec 허용(우리 .bin이
+    데이터 취급돼 미로드된 추정 원인)이라 **진짜 `lib_scan_engine.so` 확장자**로 재구성한다.
+    쓰기 위치: 실행폴더(1등팀 './lib_*.so' 위치) 우선, 실패 시 /tmp. 디코딩·쓰기 실패면 None(폴백)."""
+    import base64
+    here = os.path.dirname(os.path.abspath(__file__))
+    b64p = os.path.join(here, _B64_NAME)
+    if not os.path.isfile(b64p):
+        return None
+    try:
+        raw = base64.b64decode(open(b64p, "rb").read())
+    except Exception:
+        return None
+    for d in (here, tempfile.gettempdir()):
+        try:
+            p = os.path.join(d, "lib_scan_engine.so")
+            with open(p, "wb") as f:
+                f.write(raw)
+            if os.path.getsize(p) == len(raw):
+                return p
+        except Exception:
+            continue
+    return None
+
+
 def _candidate_paths():
-    """로드 후보 — 각 이름을 절대(dirname __file__)·cwd상대(./, 우승팀 './lib_*.so' 방식) 둘 다."""
+    """로드 후보 — ★base64 동봉본을 런타임 디코딩한 *진짜 .so*를 최우선, 그다음 직접 동봉본
+    (각 이름을 절대 dirname·cwd상대)."""
     here = os.path.dirname(os.path.abspath(__file__))
     out = []
+    try:
+        dec = _decode_so()    # ★scan_engine.b64 → lib_scan_engine.so 디코딩(진짜 .so 확장자)
+    except Exception:
+        dec = None
+    if dec:
+        out.append(dec)
     for n in _LIB_NAMES:
         out.append(os.path.join(here, n))   # 절대(robust)
         out.append(os.path.join(".", n))    # cwd-상대(서버 cwd=실행폴더 가정, 우승팀 방식)
@@ -62,9 +97,9 @@ def _candidate_paths():
 
 
 def _load_lib():
-    """동봉 공유 라이브러리를 plain `ctypes.CDLL`로 로드(우승팀 컨벤션). 다중 이름·경로 시도, 실패 시
-    None→호출부 폴백(−1 불가). scan_run 시그니처 설정. (옛 memfd/noexec 우회는 폐기 — 서버는 .so를
-    ctypes로 잘 로드함이 우승팀 자료로 확인됨.) 호출 시점은 myalgorithm이 call 시점에 lazy 호출."""
+    """동봉 .so를 plain `ctypes.CDLL`로 로드. ★base64 동봉본을 런타임 디코딩한 *진짜 lib_scan_engine.so*를
+    최우선 시도(조직위 권고·.bin 서버 미로드 수정), 그다음 직접 동봉본 폴백. 실패 시 None→호출부 폴백
+    (−1 불가). 호출 시점은 myalgorithm이 call 시점에 lazy 호출(우승팀 컨벤션)."""
     global _LIB, _LIB_TRIED
     if _LIB_TRIED:
         return _LIB
