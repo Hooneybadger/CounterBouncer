@@ -24,6 +24,7 @@ import os
 import random
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -62,17 +63,27 @@ _LIB_TRIED = False
 
 def _b64_raw():
     """scan_engine.b64(base64 동봉본) → 원본 .so 바이트. 없거나 디코딩 실패면 None.
-    ★진단 확정(서버서 scan_engine.bin=*미로드*) + 조직위 권고: 문제 파일(.so)을 base64로 동봉해
-    이메일(Gmail이 .so-in-zip 침묵차단)을 통과시키고 런타임에 원래 바이트로 되돌린다."""
+    ★base64의 역할 = 서버 추출 디렉터리가 *noexec*여도(=v1.4.x .bin이 제자리 mmap-exec 막혀 미로드된
+    유력 원인) .b64를 *읽어*(read는 noexec서도 됨) 원본 바이트를 얻어, exec 가능한 위치(/dev/shm·memfd)로
+    *재기록*해 로드하기 위함이다. ★소스 탐색을 다중화 — `__file__` 디렉터리가 어긋나는 극단까지 대비해
+    here→cwd→sys.path를 훑는다(보통 here 한 곳서 끝남; .b64는 c_engine.py와 같은 zip의 형제)."""
     import base64
-    here = os.path.dirname(os.path.abspath(__file__))
-    b64p = os.path.join(here, _B64_NAME)
-    if not os.path.isfile(b64p):
-        return None
-    try:
-        return base64.b64decode(open(b64p, "rb").read())
-    except Exception:
-        return None
+    seen = set(); cands = []
+    for d in [os.path.dirname(os.path.abspath(__file__)), os.path.abspath(".")] + [p for p in sys.path if p]:
+        try:
+            rp = os.path.realpath(d)
+        except Exception:
+            rp = d
+        if rp in seen:
+            continue
+        seen.add(rp); cands.append(os.path.join(d, _B64_NAME))
+    for b64p in cands:
+        try:
+            if os.path.isfile(b64p):
+                return base64.b64decode(open(b64p, "rb").read())
+        except Exception:
+            continue
+    return None
 
 
 def _write_dirs():
