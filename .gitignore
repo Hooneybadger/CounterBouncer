@@ -53,4 +53,7 @@ results/
 _workspace/
 gurobi.lic
 *.lic
+# 네이티브 엔진 런타임 디코딩 산물(.b64에서 디코딩됨; 커밋·제출 금지, Gmail이 .so 차단)
 lib_scan_engine.so
+*.abi3.so
+scan_engine.so

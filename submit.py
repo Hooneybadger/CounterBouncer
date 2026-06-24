@@ -23,14 +23,17 @@ EXCLUDED_PARTS = {"__pycache__", ".git", ".pytest_cache", ".mypy_cache"}
 # 는 대회 원본과 바이트 동일이라 import 대상(Bay·check_feasibility·_poly_from_verts 등)은
 # 서버 utils.py가 그대로 제공한다.
 EXCLUDED_NAMES = {"utils.py",
-                  # ★C 엔진은 scan_engine.b64(base64)로만 동봉한다 — 런타임에 lib_scan_engine.so로
-                  #   디코딩해 로드(조직위 권고·서버 .bin 미로드 수정). 직접 .so/.bin은 (a)Gmail이
-                  #   .so-in-zip 차단 (b)서버서 .bin 미로드라 *절대* 제출에 넣지 않는다(런타임 디코딩 산물
-                  #   lib_scan_engine.so가 src에 남아도 zip서 배제).
-                  "lib_scan_engine.so", "scan_engine.bin", "scan_engine"}
+                  # ★네이티브 엔진은 base64 텍스트(scan_engine_ext.b64=import용 abi3 확장,
+                  #   scan_engine.b64=ctypes/memfd 폴백 평문 .so)로만 동봉한다 — 런타임에 .so로 디코딩해
+                  #   import/load. 직접 .so/.bin은 (a)Gmail이 .so-in-zip을 확장자로 차단 (b)서버 도달해도
+                  #   ctypes 일탈로 미로드라 *절대* 제출에 안 넣는다. 런타임 디코딩 산물(*.abi3.so,
+                  #   lib_scan_engine.so)이 src에 남아도 아래 `.so` 확장자 배제로 zip서 빠진다.
+                  "scan_engine.bin", "scan_engine"}
 # 제출에 반드시 들어가야 하는 모듈(myalgorithm이 import하는 우리 코드). 검증용.
 REQUIRED_NAMES = {"myalgorithm.py", "constructor.py", "alns.py",
-                  "raster_engine.py", "baseline_greedy.py", "relax_repair.py"}
+                  "raster_engine.py", "baseline_greedy.py", "relax_repair.py",
+                  # ★네이티브 엔진 동봉본(없으면 cengine 영영 폴백) — import용 abi3 확장 + ctypes 폴백 평문
+                  "scan_engine_ext.b64", "scan_engine.b64"}
 
 
 def load_dotenv(path: Path = ROOT / ".env") -> None:
@@ -66,7 +69,9 @@ def source_files() -> list[Path]:
         and not path.is_symlink()
         and not any(part in EXCLUDED_PARTS for part in path.relative_to(SOURCE_DIR).parts)
         and path.name not in EXCLUDED_NAMES
-        and not path.name.endswith((".pyc", ".pyo"))
+        # ★.so는 무엇이든 동봉 금지 — Gmail이 .so-in-zip을 차단하고, 런타임 디코딩 산물(*.abi3.so,
+        #   lib_scan_engine.so)이 src에 남아도 zip엔 안 들어가게 한다. 엔진은 .b64로만 간다.
+        and not path.name.endswith((".pyc", ".pyo", ".so"))
     ]
     if SOURCE_DIR / "myalgorithm.py" not in files:
         raise SystemExit("src/myalgorithm.py is required.")
@@ -92,6 +97,10 @@ def build_archive(output: Path) -> Path:
         missing = REQUIRED_NAMES - set(names)
         if missing:
             raise SystemExit(f"Archive validation failed: missing required modules {sorted(missing)}.")
+        # ★.so 직접 동봉 금지(Gmail 차단·서버 미로드) — 엔진은 .b64로만. 런타임 디코딩 산물이 새어들면 차단.
+        so_in_zip = [n for n in names if n.endswith(".so")]
+        if so_in_zip:
+            raise SystemExit(f"Archive validation failed: .so must NOT be shipped (Gmail blocks): {so_in_zip}.")
         if archive.testzip() is not None:
             raise SystemExit("Archive validation failed: corrupt ZIP member detected.")
 

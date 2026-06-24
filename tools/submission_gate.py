@@ -36,7 +36,7 @@ import submit  # noqa  (build_archive)
 
 TRAIN = os.path.join(ROOT, "train")
 EXTRACT = "/tmp/ogc_submission_gate"
-LIB_NAME = "scan_engine.b64"   # ★.so를 base64로 동봉(Gmail .so-in-zip 차단 통과)→런타임 디코딩(조직위 권고)
+LIB_NAMES = ("scan_engine_ext.b64", "scan_engine.b64")   # ★import용 abi3 확장 + ctypes 폴백 평문, 둘 다 base64 동봉
 
 # C가 켜지면 이 값보다 훨씬 낮다(폴백이면 폴백값이라 위). 폴백/C 판별 임계.
 SMALL_FALLBACK = 21021      # prob_1 standard(폴백) obj. C portfolio면 ~4k.
@@ -51,23 +51,23 @@ def main():
         names = z.namelist()
         z.extractall(EXTRACT)
     ok = True
-    if LIB_NAME not in names:
-        print(f"  ★FAIL: {LIB_NAME}(base64 .so)가 zip에 없음"); ok = False
-    # ★Gmail 안전 + 서버 로드: 직접 .so/.bin은 zip에 *있으면 안 된다*(.so=Gmail 차단, .bin=서버
-    #   미로드 진단확정). base64(.b64)만 동봉 → 런타임 디코딩.
+    for ln in LIB_NAMES:
+        if ln not in names:
+            print(f"  ★FAIL: {ln}(base64 엔진)가 zip에 없음"); ok = False
+    # ★Gmail 안전 + 서버 로드: 직접 .so/.bin은 zip에 *있으면 안 된다*(.so=Gmail 확장자 차단). base64만 동봉.
     bad = [x for x in names if x.endswith(".so") or x in ("scan_engine.bin", "scan_engine")]
     if bad:
         print(f"  ★FAIL: 직접 바이너리가 zip에 있음(Gmail 차단/서버 미로드 위험): {bad}"); ok = False
     shutil.copy(os.path.join(ROOT, "src", "utils.py"), os.path.join(EXTRACT, "utils.py"))  # 서버 제공
 
-    # 2) 추출 dir서 import. ★로드는 import가 아닌 *call 시점*(이전 OGC 우승팀 컨벤션 — algorithm()
-    #    안에서 ctypes.CDLL). 그래서 import 직후 _CENGINE_OK은 None(지연)이 정상이고, algorithm()
-    #    호출 후 True여야 한다. (옛 memfd/noexec 가설 폐기 — 우승팀 자료가 동봉 .so의 ctypes 로드를 증명.)
+    # 2) 추출 dir서 import. ★엔진 로드는 *call 시점*(myalgorithm이 algorithm() 첫 호출서 lazy). 1순위는
+    #    `import scan_engine_ext`(DMS 2024 우승작 메커니즘 — ctypes 일탈을 버림), 실패 시 ctypes/memfd 폴백.
+    #    그래서 import 직후 _CENGINE_OK은 None(지연)이 정상이고, algorithm() 호출 후 True여야 한다.
     sys.path.insert(0, EXTRACT)
     import myalgorithm
     from utils import check_feasibility
-    print(f"zipfile 추출: {LIB_NAME}(base64) → import 직후 _CENGINE_OK={myalgorithm._CENGINE_OK}"
-          f"(None=call-시점 .b64 디코딩→로드 지연, 정상)")
+    print(f"zipfile 추출: {LIB_NAMES} → import 직후 _CENGINE_OK={myalgorithm._CENGINE_OK}"
+          f"(None=call-시점 디코딩→로드 지연, 정상)")
 
     # 3) 소형 portfolio + 대형 cengine이 *실제로 켜졌는지*(폴백 아닌지) obj로 확인. algorithm() 호출이
     #    call-시점 ctypes 로드를 트리거한다 — obj가 폴백보다 충분히 낮으면 C가 켜진 것.
@@ -91,11 +91,16 @@ def main():
         print(f"  {name:8} tl={tl:.0f} {lbl}: feasible={feas} obj={obj:,.0f} (폴백={fb:,}) "
               f"C발화={fired} -> {tag}")
 
-    # call 후 _CENGINE_OK=True(call-시점 ctypes 로드 성공) 확인
+    # call 후 _CENGINE_OK=True(call-시점 엔진 로드 성공) 확인 + *어느 경로*로 떴는지(import 우선)
     if not myalgorithm._CENGINE_OK:
-        print("  ★FAIL: algorithm() 호출 후에도 _CENGINE_OK=False — ctypes.CDLL 로드 실패"); ok = False
+        print("  ★FAIL: algorithm() 호출 후에도 _CENGINE_OK=False — 엔진 로드 실패"); ok = False
+    via_import = "scan_engine_ext" in sys.modules
+    print(f"  로드 경로: {'import scan_engine_ext (DMS 입증 1순위)' if via_import else 'ctypes/memfd 폴백'}")
+    if not via_import:
+        # import 폴백이 떴다는 건 로컬선 정상이나, 서버 가설(import가 답)을 검증 못 함 — 경고만.
+        print("  ⚠ 로컬서 import 경로가 아닌 폴백으로 떴다(로컬 import 자체는 위 end-to-end서 검증됨).")
 
-    print("PASS — zipfile 추출(0o644)서 scan_engine.bin을 plain ctypes로 call-시점 로드+C 발화" if ok
+    print("PASS — zipfile 추출(0o644)서 base64 디코딩 → import scan_engine_ext(우선)/ctypes(폴백)로 C 발화" if ok
           else "FAIL — 추출 조건서 C 안 켜짐")
     return 0 if ok else 1
 

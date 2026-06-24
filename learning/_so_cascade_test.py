@@ -35,19 +35,21 @@ _FAILS = []
 
 
 def _cleanup_disk():
-    """이전 시도가 남긴 lib_scan_engine.so를 모든 쓰기 후보에서 제거(① 직접로드가 memfd 테스트를
-    오염시키지 않게)."""
+    """이전 시도가 남긴 디코딩 산물(import용 scan_engine_ext.abi3.so + ctypes용 lib_scan_engine.so)을
+    모든 쓰기 후보에서 제거(잔재가 다음 테스트를 오염시키지 않게)."""
     for d in (SRC, os.path.abspath("."), "/dev/shm", "/tmp"):
-        p = os.path.join(d, "lib_scan_engine.so")
-        try:
-            os.remove(p)
-        except OSError:
-            pass
+        for n in ("lib_scan_engine.so", "scan_engine_ext.abi3.so"):
+            try:
+                os.remove(os.path.join(d, n))
+            except OSError:
+                pass
 
 
 def _reset():
-    c_engine._LIB = None
-    c_engine._LIB_TRIED = False
+    c_engine._ENGINE = None
+    c_engine._ENGINE_TRIED = False
+    import sys as _sys
+    _sys.modules.pop("scan_engine_ext", None)   # import 경로 재시도 가능하게
 
 
 def _check(cond, label):
@@ -57,17 +59,20 @@ def _check(cond, label):
 
 
 def test_A_memfd_real():
-    raw = c_engine._b64_raw()
-    _check(raw is not None and len(raw) > 1000, "A1 .b64 디코딩 → raw .so 바이트")
+    raw = c_engine._b64_raw(c_engine._PLAIN_B64_NAME)   # 평문 .so(ctypes/memfd 폴백용)
+    _check(raw is not None and len(raw) > 1000, "A1 평문 .b64 디코딩 → raw .so 바이트")
     lib = c_engine._load_from_memfd(raw, ctypes)
-    _check(lib is not None, "A2 memfd_create 로드가 이 호스트서 실제로 됨")
+    _check(lib is not None, "A2 memfd_create 로드가 이 호스트서 실제로 됨(ctypes 폴백의 최종보루)")
     _check(lib is not None and hasattr(lib, "scan_run"), "A3 memfd 로드본에 scan_run 심볼 존재")
 
 
 def test_B_normal_path():
+    """정상 경로 — 1순위 import(DMS 메커니즘)로 로드되어야 한다."""
+    import sys
     _cleanup_disk(); _reset()
     ok = c_engine.c_engine_available()
-    _check(ok, "B1 정상(무방해) 캐스케이드 로드 — 회귀 없음")
+    _check(ok, "B1 정상(무방해) 엔진 로드 — 회귀 없음")
+    _check("scan_engine_ext" in sys.modules, "B2 *import 경로*로 로드됨(DMS 입증 1순위, ctypes 아님)")
 
 
 def _fire_900(label):
@@ -109,7 +114,7 @@ def test_D_real_noexec():
 import os, sys, ctypes
 sys.path.insert(0, %r)
 import c_engine
-raw = c_engine._b64_raw()
+raw = c_engine._b64_raw(c_engine._PLAIN_B64_NAME)
 p = "/tmp/lib_scan_engine.so"
 open(p, "wb").write(raw)
 disk = c_engine._try_cdll(p, ctypes)         # /tmp가 noexec면 dlopen(mmap PROT_EXEC) 실패
