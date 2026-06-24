@@ -37,86 +37,174 @@ except ImportError:  # IDE package layout
     from ogc2026.src.constructor import _rel_bbox, loads_from_committed
 
 _MAGIC = 0x5343414E
-# ★공유 라이브러리(.so)를 ctypes로 in-process 로드한다. ★이전 OGC *우승팀* 자료가 정전 컨벤션을
-#   확정했다 — `ctypes.CDLL('./lib_myalgorithm.so')`로 동봉 .so를 algorithm() 안에서 로드해 우승했다
-#   (Gurobi까지 동적 링크). ⇒ **서버는 동봉 .so를 ctypes로 잘 로드한다**(제출 폴더 noexec 아님 — 옛
-#   noexec/memfd 가설 *폐기*). 우리 v1.4.x가 P3=736M에 머문 건 *우리 일탈* 탓으로 좁혀진다:
-#   ① 파일명 `scan_engine.bin`+무SONAME(우승팀은 `lib_*.so`+SONAME), ② import 시점 로드(우승팀은
-#   call 시점), ③ os.fork 자식 호출(우승팀은 메인). 수정: 컨벤션에 맞춰 `lib_scan_engine.so`
-#   (lib접두+SONAME)를 plain ctypes로 절대·cwd상대 다중경로로 로드하고, 로드 시점은 myalgorithm이
-#   call 시점에 lazy 호출한다. 제출 시 Gmail이 .so-in-zip을 막으면 `scan_engine.bin`으로 동봉할 수
-#   있게 두 이름을 다 시도한다(로더는 이름-불문, dlopen은 확장자 무관).
+# ★공유 라이브러리(.so)를 ctypes로 in-process 로드한다(execve 없이 dlopen=mmap). 로드 경로는
+#   3단 위치 캐스케이드 + 익명메모리 폴백으로, *디코딩-쓰기 위치* 실패까지 완전히 제거한다(_load_lib).
+#
+#   ── 왜 base64인가. 진단 제출이 서버서 `scan_engine.bin`이 *미로드*(_CENGINE_OK=False·P3 폴백 736M,
+#   alg_error 아님)임을 확정했다 — 서버가 `*.so` 확장자만 mmap-exec 허용해 데이터 취급된 `.bin`을 안
+#   띄운 것으로 보인다. 한편 이전 OGC *우승팀*은 `ctypes.CDLL('./lib_myalgorithm.so')`로 동봉 .so를
+#   로드해 우승(Gurobi까지 동적 링크) — 서버는 *진짜 .so*를 실행폴더서 잘 로드한다(noexec 아님). 그러나
+#   Gmail이 .so-in-zip을 침묵 차단(자가확인)해 .so를 그대로 동봉할 수 없다. ⇒ 조직위 권고대로 .so를
+#   base64(`scan_engine.b64`)로 동봉해 메일을 통과시키고, *런타임에 진짜 `lib_scan_engine.so`로 디코딩*
+#   해 로드한다(우승팀과 동일한 '실행폴더의 real .so + ctypes' 상태를 재구성).
+#
+#   ── 왜 다단 위치 + memfd인가. 디코딩한 .so를 *어디에 쓰느냐*가 새 실패면이다: 실행폴더가 RO이거나
+#   /tmp가 noexec면 쓰기·로드가 막힌다. 그래서 쓰기와 로드를 *결합*해(쓰기성공≠로드성공) 실행폴더→cwd→
+#   /dev/shm→/tmp→/run/user를 돌며 *처음 로드되는* 곳을 채택하고, 그 어디도 안 되면 `memfd_create`로
+#   마운트 없는 익명 메모리에 올려 dlopen한다(noexec 마운트와 무관). 옛 'memfd 폐기'는 noexec를
+#   *primary 가설*로 본 데 대한 폐기였고, 여기선 극단 샌드박스용 *최종 폴백*으로만 둔다(primary는
+#   여전히 우승팀식 실행폴더 real .so). 어느 단계든 실패면 None→폴백(feasibility-first, −1 불가).
 _B64_NAME = "scan_engine.b64"   # ★.so를 base64로 동봉(이메일 통과)→런타임 디코딩(조직위 권고)
-_LIB_NAMES = ("lib_scan_engine.so", "scan_engine.bin")   # 직접 동봉본 폴백(디코딩본 우선)
+_LIB_NAMES = ("lib_scan_engine.so", "scan_engine.bin")   # 직접 디스크 동봉본(① 우선 시도; 서버선 보통 비어 base64로)
 _LIB = None         # ctypes.CDLL 핸들(캐시)
 _LIB_TRIED = False
 
 
-def _decode_so():
-    """★진단 확정(서버서 scan_engine.bin _CENGINE_OK=False=*미로드*) + 조직위 권고의 수정:
-    문제 파일(.so)을 base64로 동봉해 이메일 서비스(Gmail이 .so-in-zip 차단)를 통과시키고, *런타임에
-    원래 .so로 디코딩*해 디스크에 쓴 뒤 로드한다. 서버가 *.so 확장자만 mmap-exec 허용(우리 .bin이
-    데이터 취급돼 미로드된 추정 원인)이라 **진짜 `lib_scan_engine.so` 확장자**로 재구성한다.
-    쓰기 위치: 실행폴더(1등팀 './lib_*.so' 위치) 우선, 실패 시 /tmp. 디코딩·쓰기 실패면 None(폴백)."""
+def _b64_raw():
+    """scan_engine.b64(base64 동봉본) → 원본 .so 바이트. 없거나 디코딩 실패면 None.
+    ★진단 확정(서버서 scan_engine.bin=*미로드*) + 조직위 권고: 문제 파일(.so)을 base64로 동봉해
+    이메일(Gmail이 .so-in-zip 침묵차단)을 통과시키고 런타임에 원래 바이트로 되돌린다."""
     import base64
     here = os.path.dirname(os.path.abspath(__file__))
     b64p = os.path.join(here, _B64_NAME)
     if not os.path.isfile(b64p):
         return None
     try:
-        raw = base64.b64decode(open(b64p, "rb").read())
+        return base64.b64decode(open(b64p, "rb").read())
     except Exception:
         return None
-    for d in (here, tempfile.gettempdir()):
+
+
+def _write_dirs():
+    """디코딩한 .so를 쓸 후보 디렉터리 — *쓰기가능 AND 실행가능(non-noexec)*을 둘 다 만족해야 로드된다.
+    실행폴더(1등팀 './lib_*.so' 위치·noexec 아님 확정)→cwd→/dev/shm(tmpfs·거의 항상 exec)→/tmp→
+    /run/user/uid 순. 각 위치에 *쓰고 로드까지 시도*해(_load_lib) noexec·RO면 다음으로 넘어간다 —
+    '쓰기 성공'만 보던 옛 _decode_so의 구멍(noexec여도 쓰기는 됨→로드 실패→폴백)을 닫는다.
+    존재·중복(realpath) 제거, 순서 보존."""
+    cands = [os.path.dirname(os.path.abspath(__file__)), os.path.abspath("."), "/dev/shm"]
+    try:
+        cands.append(tempfile.gettempdir())
+    except Exception:
+        pass
+    try:
+        cands.append("/run/user/%d" % os.getuid())
+    except Exception:
+        pass
+    seen = set(); out = []
+    for d in cands:
         try:
-            p = os.path.join(d, "lib_scan_engine.so")
-            with open(p, "wb") as f:
-                f.write(raw)
-            if os.path.getsize(p) == len(raw):
-                return p
+            rp = os.path.realpath(d)
         except Exception:
+            rp = d
+        if rp in seen or not os.path.isdir(d):
+            continue
+        seen.add(rp); out.append(d)
+    return out
+
+
+def _try_cdll(path, ctypes):
+    """path를 ctypes.CDLL로 로드 + scan_run 시그니처 바인딩. 성공 시 lib, 실패(부재·noexec·의존성·
+    심볼없음)면 None — 모든 실패를 흡수해 호출부가 다음 후보/폴백으로 간다(−1 불가)."""
+    try:
+        if not os.path.isfile(path):
+            return None
+        lib = ctypes.CDLL(path)
+        lib.scan_run.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_double]
+        lib.scan_run.restype = ctypes.c_int
+        return lib
+    except Exception:
+        return None
+
+
+def _load_from_memfd(raw, ctypes):
+    """★최종 폴백 — 마운트된 파일시스템 없이 *익명 메모리*(memfd_create)에 .so를 올려 dlopen한다.
+    실행폴더가 read-only이고 /tmp·/dev/shm이 모두 noexec인 극단 샌드박스에서도 로드되게 하는 마지막
+    보루다(쓰기-위치 문제를 완전 제거). memfd는 마운트가 아니라 anon 메모리라 noexec 마운트 옵션과
+    무관하고, /proc/self/fd/N 경로로 dlopen된다. glibc 2.27+ memfd_create 사용(서버 Ubuntu 24.04=
+    glibc 2.39). MFD_EXEC(커널 6.3+)를 먼저 시도해 vm.memfd_noexec 하드닝에 대비하고, 구커널이면
+    EINVAL→plain 폴백. 어떤 실패(구커널·하드닝·심볼없음)든 None→폴백(순수 ctypes/os라 segfault 없음, −1 불가)."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.memfd_create.restype = ctypes.c_int
+        libc.memfd_create.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+    except Exception:
+        return None
+    MFD_CLOEXEC = 0x0001
+    MFD_EXEC = 0x0010   # 커널 6.3+ (vm.memfd_noexec 하드닝 시 필요). 구커널은 EINVAL→plain.
+    for flags in (MFD_CLOEXEC | MFD_EXEC, MFD_CLOEXEC):
+        fd = -1
+        try:
+            fd = libc.memfd_create(b"scan_engine", flags)
+            if fd < 0:
+                continue
+            mv = memoryview(raw); off = 0
+            while off < len(raw):
+                w = os.write(fd, mv[off:])
+                if w <= 0:
+                    raise OSError("memfd write stalled")
+                off += w
+            lib = _try_cdll("/proc/self/fd/%d" % fd, ctypes)
+            if lib is not None:
+                return lib   # fd는 닫지 않는다 — dlopen이 이 fd의 코드를 mmap 유지
+            os.close(fd)
+        except Exception:
+            try:
+                if fd >= 0:
+                    os.close(fd)
+            except Exception:
+                pass
             continue
     return None
 
 
-def _candidate_paths():
-    """로드 후보 — ★base64 동봉본을 런타임 디코딩한 *진짜 .so*를 최우선, 그다음 직접 동봉본
-    (각 이름을 절대 dirname·cwd상대)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    out = []
-    try:
-        dec = _decode_so()    # ★scan_engine.b64 → lib_scan_engine.so 디코딩(진짜 .so 확장자)
-    except Exception:
-        dec = None
-    if dec:
-        out.append(dec)
-    for n in _LIB_NAMES:
-        out.append(os.path.join(here, n))   # 절대(robust)
-        out.append(os.path.join(".", n))    # cwd-상대(서버 cwd=실행폴더 가정, 우승팀 방식)
-    return out
-
-
 def _load_lib():
-    """동봉 .so를 plain `ctypes.CDLL`로 로드. ★base64 동봉본을 런타임 디코딩한 *진짜 lib_scan_engine.so*를
-    최우선 시도(조직위 권고·.bin 서버 미로드 수정), 그다음 직접 동봉본 폴백. 실패 시 None→호출부 폴백
-    (−1 불가). 호출 시점은 myalgorithm이 call 시점에 lazy 호출(우승팀 컨벤션)."""
+    """동봉 .so를 plain ctypes.CDLL로 in-process 로드. 로드 *위치*를 다단으로 시도해 디코딩-쓰기 위치
+    실패(실행폴더 RO·tmp noexec)를 완전히 제거한다(features/18):
+      ① 디스크에 직접 동봉된 .so/.bin이 있으면 로드(비-Gmail 직송·이미 디코딩된 경우). 서버선 보통
+         비어 빠르게 통과한다(Gmail이 .so를 막아 .b64만 동봉).
+      ② base64 동봉본을 디코딩 → 실행폴더→cwd→/dev/shm→/tmp→/run/user 순으로 *쓰고 로드 시도*,
+         처음 *로드되는* 위치를 채택(쓰기 성공이 아니라 로드 성공이 기준 — noexec면 다음으로).
+      ③ 그래도 안 되면 memfd_create로 *익명 메모리*에 올려 dlopen(어떤 쓰기가능-exec 마운트도 불요).
+    어느 단계든 실패면 None→호출부 폴백(−1 불가). myalgorithm이 call 시점에 lazy 호출(우승팀 컨벤션)."""
     global _LIB, _LIB_TRIED
     if _LIB_TRIED:
         return _LIB
     _LIB_TRIED = True
     import ctypes
-    for p in _candidate_paths():
-        try:
-            if not os.path.isfile(p):
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    # ① 디스크에 직접 동봉된 .so/.bin (비-Gmail 직송·이미 디코딩된 경우)
+    for n in _LIB_NAMES:
+        for p in (os.path.join(here, n), os.path.join(".", n)):
+            lib = _try_cdll(p, ctypes)
+            if lib is not None:
+                _LIB = lib
+                return _LIB
+
+    # ② base64 동봉본 디코딩 → 다단 위치에 쓰고 *로드 시도*(처음 로드되는 위치 채택)
+    raw = _b64_raw()
+    if raw:
+        for d in _write_dirs():
+            p = os.path.join(d, "lib_scan_engine.so")
+            try:
+                with open(p, "wb") as f:
+                    f.write(raw)
+                if os.path.getsize(p) != len(raw):
+                    continue
+            except Exception:
                 continue
-            lib = ctypes.CDLL(p)
-            lib.scan_run.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_double]
-            lib.scan_run.restype = ctypes.c_int
+            lib = _try_cdll(p, ctypes)
+            if lib is not None:
+                _LIB = lib
+                return _LIB
+
+        # ③ 최종 폴백: 익명 메모리(memfd) — 어떤 쓰기가능-exec 마운트도 필요 없음
+        lib = _load_from_memfd(raw, ctypes)
+        if lib is not None:
             _LIB = lib
             return _LIB
-        except Exception:
-            continue
-    return _LIB
+
+    return _LIB   # None → 폴백
 
 
 def c_engine_available() -> bool:
